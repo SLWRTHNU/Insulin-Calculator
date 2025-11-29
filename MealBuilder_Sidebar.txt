@@ -1,0 +1,494 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top">
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        font-size: 12px;
+        padding: 8px;
+      }
+      h2 {
+        font-size: 14px;
+        margin: 0 0 8px 0;
+      }
+      label {
+        display: block;
+        margin-top: 6px;
+        font-weight: bold;
+      }
+      input[type="text"],
+      input[type="number"] {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 4px;
+        margin-top: 2px;
+      }
+      .section {
+        margin-top: 10px;
+        padding-top: 6px;
+        border-top: 1px solid #ddd;
+      }
+      .ingredient {
+        margin-top: 6px;
+        padding: 6px 4px;
+        border: 1px solid #eee;
+        border-radius: 3px;
+      }
+      .ingredient-title {
+        font-weight: bold;
+        margin-bottom: 4px;
+      }
+      .row {
+        display: flex;
+        gap: 4px;
+      }
+      .row > div {
+        flex: 1;
+      }
+      .small-label {
+        font-weight: normal;
+        font-size: 11px;
+      }
+      .totals-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 4px 6px;
+        align-items: center;
+      }
+      .totals-grid label {
+        margin-top: 0;
+      }
+      .totals-grid input {
+        width: 100%;
+      }
+      button {
+        margin-top: 10px;
+        padding: 6px 10px;
+        width: 100%;
+      }
+      .status {
+        margin-top: 8px;
+        min-height: 18px;
+        font-size: 11px;
+      }
+            .readonly-field {
+        background-color: #f3f3f3;
+        color: #555;
+      }
+    </style>
+  </head>
+  <body>
+
+
+ 
+    <label for="mealTitle">Meal Title:</label>
+    <input id="mealTitle" type="text" placeholder="e.g. Salad" />
+
+    <!-- Ingredients -->
+    <div class="section">
+      <div id="ingredients"></div>
+    </div>
+
+    <!-- Totals for full meal -->
+    <div class="section">
+      <div class="totals-grid">
+        <label for="totalNet">Total Net Carbs:</label>
+        <input id="totalNet" type="text" readonly />
+
+        <label for="totalWeight">Total Weight:</label>
+        <input id="totalWeight" type="text" readonly />
+
+        <label for="totalCf">Total Carb Factor:</label>
+        <input id="totalCf" type="text" readonly />
+      </div>
+    </div>
+
+    <!-- Portion -->
+    <div class="section">
+      <div class="totals-grid">
+        <label for="portionWeight">Weight Given:</label>
+        <input id="portionWeight" type="number" step="0.01" min="0" />
+
+        <label for="portionCarbs">Total Carbs:</label>
+        <input id="portionCarbs" type="text" readonly />
+      </div>
+    </div>
+
+    <button onclick="addToMeal()">Add to Meal</button>
+    <div id="status" class="status"></div>
+
+    <!-- Autocomplete list for food names -->
+    <datalist id="mb_foodList"></datalist>
+
+    <script>
+      // In-memory ingredient rows for this sidebar instance only.
+      // Each row: { id, food, cf, weight, carbs }
+      var mb_rows = [];
+      var mb_nextId = 1;
+
+      // Food chart loaded from the sheet: [{name, cf}, ...]
+      var mb_foodChart = [];
+
+      // ----- Food chart loading -----
+      function loadFoodChart() {
+        if (!google || !google.script || !google.script.run) {
+          // If previewed outside Sheets, skip loading.
+          return;
+        }
+
+        google.script.run
+          .withSuccessHandler(function(data) {
+            mb_foodChart = data || [];
+            renderFoodDatalist();
+          })
+          .withFailureHandler(function(err) {
+            console.error('Failed to load food chart:', err);
+            mb_foodChart = [];
+            renderFoodDatalist();
+          })
+          .MealBuilder_getFoodChart();
+      }
+
+      function renderFoodDatalist() {
+        var dl = document.getElementById('mb_foodList');
+        if (!dl) return;
+        dl.innerHTML = '';
+        mb_foodChart.forEach(function(item) {
+          if (!item || !item.name) return;
+          var opt = document.createElement('option');
+          opt.value = item.name;
+          dl.appendChild(opt);
+        });
+      }
+
+      // Compute this row's carbs as cf * weight and push into the row + input
+      function updateRowCarbs(row, cfInput, wtInput, carbsInput) {
+        var cf = parseFloat(row.cf);
+        var wt = parseFloat(row.weight);
+        if (!isNaN(cf) && !isNaN(wt)) {
+          var calc = cf * wt;
+          var txt = calc.toFixed(2);   // 2 decimal places
+          row.carbs = txt;
+          if (carbsInput) {
+            carbsInput.value = txt;
+          }
+        }
+      }
+
+      // ----- Initial ingredient rows -----
+      function init() {
+        // Start with two blank rows
+        mb_rows = [
+          { id: mb_nextId++, food: '', cf: '', weight: '', carbs: '' },
+          { id: mb_nextId++, food: '', cf: '', weight: '', carbs: '' }
+        ];
+        renderIngredients();
+        recomputeTotals();
+      }
+
+      function renderIngredients() {
+        var container = document.getElementById('ingredients');
+        container.innerHTML = '';
+
+        mb_rows.forEach(function(row, idx) {
+          var wrapper = document.createElement('div');
+          wrapper.className = 'ingredient';
+          wrapper.dataset.id = row.id;
+
+          var title = document.createElement('div');
+          title.className = 'ingredient-title small-label';
+          title.textContent = 'Food #' + (idx + 1);
+          wrapper.appendChild(title);
+
+          // Food
+          var foodLabel = document.createElement('label');
+          foodLabel.className = 'small-label';
+          foodLabel.textContent = 'Food:';
+          wrapper.appendChild(foodLabel);
+
+          var foodInput = document.createElement('input');
+          foodInput.type = 'text';
+          foodInput.value = row.food || '';
+          foodInput.setAttribute('list', 'mb_foodList');
+
+          // We'll declare these first so they are in scope for handlers
+          var cfInput, wtInput, carbsInput;
+
+          foodInput.oninput = function() {
+            row.food = foodInput.value;
+            // if exact match in food chart, auto-fill carb factor and row carbs
+            trySetCfFromFood(row, foodInput, cfInput, wtInput, carbsInput);
+            ensureBlankRow();
+          };
+          wrapper.appendChild(foodInput);
+
+          // Carb Factor & Total Weight & Total Net Carbs
+          var row1 = document.createElement('div');
+          row1.className = 'row';
+
+          var cfDiv = document.createElement('div');
+          var cfLabel = document.createElement('label');
+          cfLabel.className = 'small-label';
+          cfLabel.textContent = 'Carb Factor:';
+          cfInput = document.createElement('input');
+          cfInput.type = 'number';
+          cfInput.step = '0.0001';
+          cfInput.value = row.cf || '';
+          cfInput.oninput = function() {
+            row.cf = cfInput.value;
+            updateRowCarbs(row, cfInput, wtInput, carbsInput);
+            recomputeTotals();
+            ensureBlankRow();
+          };
+          cfDiv.appendChild(cfLabel);
+          cfDiv.appendChild(cfInput);
+          row1.appendChild(cfDiv);
+
+          var wtDiv = document.createElement('div');
+          var wtLabel = document.createElement('label');
+          wtLabel.className = 'small-label';
+          wtLabel.textContent = 'Total Weight Given:';
+          wtInput = document.createElement('input');
+          wtInput.type = 'number';
+          wtInput.step = '0.01';
+          wtInput.value = row.weight || '';
+          wtInput.oninput = function() {
+            row.weight = wtInput.value;
+            updateRowCarbs(row, cfInput, wtInput, carbsInput);
+            recomputeTotals();
+            ensureBlankRow();
+          };
+          wtDiv.appendChild(wtLabel);
+          wtDiv.appendChild(wtInput);
+          row1.appendChild(wtDiv);
+
+          wrapper.appendChild(row1);
+
+          var row2 = document.createElement('div');
+          row2.className = 'row';
+
+          var carbsDiv = document.createElement('div');
+          carbsDiv.style.flex = '1';
+          var carbsLabel = document.createElement('label');
+          carbsLabel.className = 'small-label';
+          carbsLabel.textContent = 'Total Net Carbs:';
+          carbsInput = document.createElement('input');
+          carbsInput.type = 'number';
+          carbsInput.step = '0.01';
+          carbsInput.value = row.carbs || '';
+carbsInput.readOnly = true;
+
+          carbsInput.classList.add('readonly-field');
+          carbsDiv.appendChild(carbsLabel);
+          carbsDiv.appendChild(carbsInput);
+          row2.appendChild(carbsDiv);
+
+          wrapper.appendChild(row2);
+
+          container.appendChild(wrapper);
+        });
+      }
+
+      // When the food name matches an entry in the chart, auto-fill CF (+ row carbs if weight present).
+      function trySetCfFromFood(row, foodInputEl, cfInput, wtInput, carbsInput) {
+        if (!mb_foodChart || !mb_foodChart.length) return;
+        var name = (row.food || '').trim().toLowerCase();
+        if (!name) return;
+
+        var match = mb_foodChart.find(function(item) {
+          return item && item.name &&
+                 item.name.toLowerCase() === name;
+        });
+        if (!match) return;
+
+        row.cf = match.cf;
+        if (cfInput) {
+          cfInput.value = match.cf;
+        }
+
+        // If weight is already present, compute net carbs now.
+        updateRowCarbs(row, cfInput, wtInput, carbsInput);
+        recomputeTotals();
+      }
+
+      // Always keep one extra blank ingredient row at the bottom.
+      function ensureBlankRow() {
+        var last = mb_rows[mb_rows.length - 1];
+        if (!last) return;
+        var hasData =
+          (last.food && last.food.trim() !== '') ||
+          (last.cf && String(last.cf).trim() !== '') ||
+          (last.weight && String(last.weight).trim() !== '') ||
+          (last.carbs && String(last.carbs).trim() !== '');
+        if (hasData) {
+          mb_rows.push({ id: mb_nextId++, food: '', cf: '', weight: '', carbs: '' });
+          renderIngredients();
+          recomputeTotals();
+        }
+      }
+
+      function recomputeTotals() {
+        var totalNet = 0;
+        var totalWt  = 0;
+
+        mb_rows.forEach(function(r) {
+          var cf  = parseFloat(r.cf);
+          var wt  = parseFloat(r.weight);
+          var ncs = r.carbs !== '' ? parseFloat(r.carbs) : NaN;
+
+          if (!isNaN(ncs)) {
+            // User provided or computed net carbs explicitly
+            totalNet += ncs;
+            if (!isNaN(wt)) {
+              totalWt += wt;
+            }
+          } else if (!isNaN(cf) && !isNaN(wt)) {
+            // Derive net carbs from cf * weight if row.carbs not set
+            var calcCarbs = cf * wt;
+            totalNet += calcCarbs;
+            totalWt  += wt;
+          }
+        });
+
+        var totalCf = (totalWt > 0) ? (totalNet / totalWt) : 0;
+
+        document.getElementById('totalNet').value =
+          totalNet > 0 ? totalNet.toFixed(2) : '';
+        document.getElementById('totalWeight').value =
+          totalWt > 0 ? totalWt.toFixed(2) : '';
+        document.getElementById('totalCf').value =
+          totalCf > 0 ? totalCf.toFixed(4).replace(/0+$/, '').replace(/\.$/, '') : '';
+
+        // Portion carbs
+        var wgStr = document.getElementById('portionWeight').value;
+        var wg = parseFloat(wgStr);
+        var portionCarbs = (!isNaN(wg) && totalCf > 0) ? (wg * totalCf) : NaN;
+        document.getElementById('portionCarbs').value =
+          !isNaN(portionCarbs) ? portionCarbs.toFixed(2) : '';
+      }
+
+      function setStatus(msg, isError) {
+        var el = document.getElementById('status');
+        el.textContent = msg || '';
+        el.style.color = isError ? 'red' : 'green';
+      }
+
+                  function addToMeal() {
+        setStatus('', false);
+        recomputeTotals();
+
+        var title = document.getElementById('mealTitle').value.trim();
+        var totalCfStr     = document.getElementById('totalCf').value.trim();
+        var totalNetStr    = document.getElementById('totalNet').value.trim();
+        var totalWeightStr = document.getElementById('totalWeight').value.trim();
+        var wgStr          = document.getElementById('portionWeight').value.trim();
+        var portionCarbStr = document.getElementById('portionCarbs').value.trim();
+
+        if (!title) {
+          setStatus('Please enter a Meal Title.', true);
+          return;
+        }
+        if (!totalCfStr || !totalNetStr || !totalWeightStr) {
+          setStatus('Totals are empty. Add ingredients first.', true);
+          return;
+        }
+        if (!wgStr) {
+          setStatus('Please enter Weight Given.', true);
+          return;
+        }
+        if (!portionCarbStr) {
+          setStatus('Total Carbs is empty. Check your inputs.', true);
+          return;
+        }
+
+        var totalCf  = parseFloat(totalCfStr);
+        var totalNet = parseFloat(totalNetStr);
+        var totalWt  = parseFloat(totalWeightStr);
+        var wg       = parseFloat(wgStr);
+        var tCarbs   = parseFloat(portionCarbStr);
+
+        if (!isFinite(totalCf) || totalCf <= 0) {
+          setStatus('Total Carb Factor must be a positive number.', true);
+          return;
+        }
+        if (!isFinite(totalNet) || totalNet < 0) {
+          setStatus('Total Net Carbs must be zero or positive.', true);
+          return;
+        }
+        if (!isFinite(totalWt) || totalWt <= 0) {
+          setStatus('Total Weight must be a positive number.', true);
+          return;
+        }
+        if (!isFinite(wg) || wg <= 0) {
+          setStatus('Weight Given must be a positive number.', true);
+          return;
+        }
+        if (!isFinite(tCarbs) || tCarbs < 0) {
+          setStatus('Total Carbs must be a non-negative number.', true);
+          return;
+        }
+
+        // Build a clean ingredient list from mb_rows
+        var ingredients = [];
+        mb_rows.forEach(function(r) {
+          var food  = (r.food   || '').trim();
+          var cf    = (r.cf     || '').trim();
+          var wt    = (r.weight || '').trim();
+          var carbs = (r.carbs  || '').trim();
+          // skip completely empty rows
+          if (!food && !cf && !wt && !carbs) return;
+
+          ingredients.push({
+            food:   food,
+            cf:     cf,
+            weight: wt,
+            carbs:  carbs
+          });
+        });
+
+        var payload = {
+          title:            title,
+          totalCarbFactor:  totalCf,
+          recipeNetCarbs:   totalNet,
+          recipeWeight:     totalWt,
+          weightGiven:      wg,
+          totalCarbs:       tCarbs,
+          ingredients:      ingredients
+        };
+
+        google.script.run
+          .withSuccessHandler(function(info) {
+            if (info && info.sheet) {
+              setStatus(
+                'Added "' + info.title + '" to ' +
+                info.sheet + ' (starting row ' + info.startRow + ').',
+                false
+              );
+            } else {
+              setStatus('Meal added to active sheet.', false);
+            }
+          })
+          .withFailureHandler(function(err) {
+            setStatus(err && err.message ? err.message : String(err), true);
+          })
+          .MealBuilder_addToMeal(payload);
+      }
+
+
+
+      // Recompute totals when portion weight changes
+      document.addEventListener('input', function(e) {
+        if (e.target && e.target.id === 'portionWeight') {
+          recomputeTotals();
+        }
+      });
+
+      // On load: render fields immediately, then load food chart in background
+      window.onload = function() {
+        init();
+        loadFoodChart();
+      };
+    </script>
+  </body>
+</html>

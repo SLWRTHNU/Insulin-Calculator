@@ -1,0 +1,197 @@
+/*******************************************************
+ * Post-Meal BG Tracker (AUTO)
+ * - No manual menu clicks required.
+ * - When F15 gets a time on a meal sheet, a 1-min timer
+ *   (if not already present) ensures rows 5–10 fill at
+ *   F15 + [30,60,90,120,150,180] minutes.
+ * - L = time logged, M = scheduled minutes after bolus (30..180),
+ *   N = BG (mmol/L, 1 dp), O = trend arrow, P = delta.
+ ******************************************************/
+
+/** ======== NIGHTSCOUT CONFIG ======== **/
+var NS_BASE_URL = 'https://sennaloop-673ad2782247.herokuapp.com'; // Nightscout root (no trailing slash)
+var NS_TOKEN    = ''; // optional Nightscout read token ('' if unused)
+
+/** ======== SHEETS / LAYOUT ======== **/
+var MEAL_SHEETS = ['Breakfast','Morning Snack','Lunch','Afternoon Snack','Dinner','Evening Snack'];
+var OFFSETS_MIN = [30, 60, 90, 120, 150, 180]; // minutes after F15
+var START_ROW   = 5; // slots are rows 5..10
+// Columns: L=12 (time), M=13 (minutes), N=14 (BG), O=15 (arrow), P=16 (delta)
+
+/** ======== ROUTER HOOK: onEdit handler wrapper ======== **/
+/**
+ * Called by Router.onEdit(e) as onEdit_PostBolusTracking(e).
+ * Ensures the timer exists when F15 is edited, and optionally
+ * clears post-bolus tracking when F15 is cleared.
+ */
+function onEdit_PostBolusTracking(e) {
+  if (!e) return;
+  var r = e.range;
+  var sh = r.getSheet();
+  if (!sh) return;
+  var name = sh.getName();
+
+  // Only care about configured meal sheets
+  var idx = MEAL_SHEETS.indexOf(name);
+  if (idx === -1) return;
+
+  // Only react to F15
+  if (r.getRow() !== 15 || r.getColumn() !== 6) return;
+
+  // If F15 was cleared, clear L/N/O/P (M stays as 30,60,...)
+  if (e.value === '' || e.value === null || typeof e.value === 'undefined') {
+    sh.getRangeList(['L5:L10','N5:N10','O5:O10','P5:P10'])
+      .clear({contentsOnly:true, skipFilteredRows:true});
+    return;
+  }
+
+  // If F15 now has a value, make sure the timer exists
+  pm_ensureTimer_();
+
+  // Run one immediate tick so already-due rows fill right away
+  pm_tick_();
+}
+
+/** ======== AUTO-START BACKGROUND TIMER ======== **/
+function pm_ensureTimer_() {
+  // Ensure a 1-minute trigger for pm_tick_ exists
+  var triggers = ScriptApp.getProjectTriggers();
+  var exists = false;
+  for (var i = 0; i < triggers.length; i++) {
+    if (triggers[i].getHandlerFunction && triggers[i].getHandlerFunction() === 'pm_tick_') {
+      exists = true;
+      break;
+    }
+  }
+  if (!exists) {
+    ScriptApp.newTrigger('pm_tick_')
+      .timeBased()
+      .everyMinutes(1)
+      .create();
+  }
+}
+
+/** ======== MAIN TICK ======== **/
+function pm_tick_() {
+  var ss = SpreadsheetApp.getActive();
+  var tz = ss.getSpreadsheetTimeZone() || Session.getScriptTimeZone() || 'Etc/UTC';
+
+  // Fetch latest+previous Nightscout reading once per tick
+  var latest = ns_fetchLatestTwo_(NS_BASE_URL, NS_TOKEN);
+  if (!latest) return;
+
+  var mmol   = latest.mmol;      // latest mmol/L (1 dp)
+  var dir    = latest.direction; // direction key
+  var arrow  = ns_arrow_(dir);   // pretty arrow
+  var delta  = latest.delta;     // mmol/L difference (±, 1 dp)
+  var now    = new Date();
+  var nowStr = Utilities.formatDate(now, tz, 'h:mm a');
+
+  for (var s = 0; s < MEAL_SHEETS.length; s++) {
+    var sh = ss.getSheetByName(MEAL_SHEETS[s]);
+    if (!sh) continue;
+
+    // Read F15 as display value (time text)
+    var f15Text = (sh.getRange('F15').getDisplayValue() || '').trim();
+    if (!f15Text) continue; // tracking not started on this sheet
+
+    var bolus = pm_buildDateFromTimeString_(f15Text, tz);
+    if (!bolus) continue;
+
+    // For each offset slot, if now >= due and N is empty, log once
+    for (var i = 0; i < OFFSETS_MIN.length; i++) {
+      var minutes = OFFSETS_MIN[i];
+      var row     = START_ROW + i;
+      var due     = new Date(bolus.getTime() + minutes * 60000);
+
+      var nVal = (sh.getRange(row, 14).getDisplayValue() || '').trim(); // N
+      if (!nVal && now.getTime() >= due.getTime()) {
+        // M is the scheduled offset (30,60,...) – we write it explicitly
+        sh.getRange(row, 13).setValue(minutes);                         // M
+        sh.getRange(row, 12).setValue(nowStr);                          // L
+        sh.getRange(row, 14).setNumberFormat('0.0').setValue(mmol);     // N
+        sh.getRange(row, 15).setValue(arrow);                           // O
+        sh.getRange(row, 16).setValue(ns_signed1dp_(delta));            // P
+      }
+    }
+  }
+}
+
+/** ======== Nightscout helpers ======== **/
+function ns_fetchLatestTwo_(baseUrl, token) {
+  var root = String(baseUrl || '').replace(/\/+$/, '');
+  var qs   = token ? ('?token=' + encodeURIComponent(token)) : '';
+  var opts = { muteHttpExceptions: true };
+
+  function num(x) {
+    var n = Number(x);
+    return isFinite(n) ? n : NaN;
+  }
+  function first(obj, keys) {
+    if (!obj) return null;
+    for (var i = 0; i < keys.length; i++) {
+      var k = keys[i];
+      if (obj[k] !== null && obj[k] !== undefined) return obj[k];
+    }
+    return null;
+  }
+
+  // Get two latest entries for delta computation
+  var sep  = qs ? ('&' + qs.slice(1)) : '';
+  var url  = root + '/api/v1/entries/sgv.json?count=2' + sep;
+
+  try {
+    var res = UrlFetchApp.fetch(url, opts);
+    if (res.getResponseCode() !== 200) return null;
+    var arr = JSON.parse(res.getContentText());
+    if (!arr || !arr.length) return null;
+
+    var a0 = arr[0], a1 = arr.length > 1 ? arr[1] : null;
+    var mgdl0 = num(first(a0, ['sgv','mgdl','sg']));
+    var mgdl1 = a1 ? num(first(a1, ['sgv','mgdl','sg'])) : NaN;
+    if (!isFinite(mgdl0)) return null;
+
+    var mmol0 = Math.round((mgdl0 / 18) * 10) / 10; // 1 dp
+    var dmmol = (isFinite(mgdl1) ? (mgdl0 - mgdl1) / 18 : 0);
+    dmmol = Math.round(dmmol * 10) / 10;
+
+    var direction = String(first(a0, ['direction']) || '');
+
+    return { mmol:mmol0, delta:dmmol, direction:direction };
+  } catch (e) {
+    Logger.log('Nightscout fetch error: ' + e);
+    return null;
+  }
+}
+
+function ns_arrow_(direction) {
+  var d = String(direction || '').toLowerCase();
+  if (d === 'flat')          return '→';
+  if (d === 'fortyfiveup')   return '↗';
+  if (d === 'singleup')      return '↑';
+  if (d === 'doubleup')      return '⇑';
+  if (d === 'fortyfivedown') return '↘';
+  if (d === 'singledown')    return '↓';
+  if (d === 'doubledown')    return '⇓';
+  return '';
+}
+
+function ns_signed1dp_(x) {
+  if (!isFinite(x)) return '';
+  var v = Math.round(x * 10) / 10;
+  return (v >= 0 ? '+' : '') + v.toFixed(1);
+}
+
+/** ======== Date utility: today’s date + time text ======== **/
+function pm_buildDateFromTimeString_(timeText, tz) {
+  try {
+    var today = new Date();
+    var y = today.getFullYear(), m = today.getMonth(), d = today.getDate();
+    // Construct a Date by formatting "yyyy-MM-dd time"
+    var baseStr = Utilities.formatDate(new Date(y, m, d, 0, 0, 0), tz, 'yyyy-MM-dd');
+    var parsed  = new Date(baseStr + ' ' + timeText);
+    return isFinite(parsed.getTime()) ? parsed : null;
+  } catch (e) {
+    return null;
+  }
+}

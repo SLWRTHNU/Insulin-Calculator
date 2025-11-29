@@ -1,0 +1,214 @@
+/************************************************************
+ * Meal Builder Sidebar
+ * - Dynamic multi-ingredient builder in sidebar
+ * - Inserts aggregated meal into next food block on active
+ *   meal sheet (Breakfast, Lunch, Dinner, etc.).
+ ************************************************************/
+
+var MEAL_SHEETS = [
+  'Breakfast', 'Morning Snack', 'Lunch',
+  'Afternoon Snack', 'Dinner', 'Evening Snack'
+];
+
+// Sheet that holds the food name in column A and carb factor in column B
+// Make sure this matches your tab name exactly.
+var FOOD_CHART_SHEET = 'Food Chart'; // e.g. your existing "Food Chart" tab
+
+/**
+ * Add a "Meal Builder" menu. Call from Router.onOpen().
+ */
+function onOpen_MealBuilderMenu() {
+  SpreadsheetApp.getUi()
+    .createMenu('Meal Builder')
+    .addItem('Open Meal Builder', 'MealBuilder_showSidebar')
+    .addToUi();
+}
+
+/**
+ * Show the sidebar.
+ */
+function MealBuilder_showSidebar() {
+  var html = HtmlService.createHtmlOutputFromFile('MealBuilder_Sidebar')
+    .setTitle('Meal Builder');
+  SpreadsheetApp.getUi().showSidebar(html);
+}
+
+
+
+/**
+ * Insert calculated meal into the next available food block
+ * on the active meal sheet, and store a single Meal Builder
+ * breakdown in the U–X / AA area.
+ *
+ * payload = {
+ *   title: string,
+ *   totalCarbFactor: number,  // recipe CF = totalNet / totalWeight
+ *   recipeNetCarbs: number,   // full recipe net carbs
+ *   recipeWeight: number,     // full recipe weight
+ *   weightGiven: number,      // portion weight
+ *   totalCarbs: number,       // portion carbs
+ *   ingredients: [ {food, cf, weight, carbs}, ... ]
+ * }
+ */
+function MealBuilder_addToMeal(payload) {
+  if (!payload) {
+    throw new Error('No meal data received.');
+  }
+
+  var title   = String(payload.title || '').trim();
+  var cf      = Number(payload.totalCarbFactor);
+  var rNet    = Number(payload.recipeNetCarbs);
+  var rWt     = Number(payload.recipeWeight);
+  var wGiven  = Number(payload.weightGiven);
+  var tCarbs  = Number(payload.totalCarbs);
+
+  if (!title) {
+    throw new Error('Meal Title is required.');
+  }
+  if (!isFinite(cf) || cf <= 0) {
+    throw new Error('Total Carb Factor must be a positive number.');
+  }
+  if (!isFinite(rNet) || rNet < 0) {
+    throw new Error('Recipe Net Carbs must be zero or positive.');
+  }
+  if (!isFinite(rWt) || rWt <= 0) {
+    throw new Error('Recipe Weight must be a positive number.');
+  }
+  if (!isFinite(wGiven) || wGiven <= 0) {
+    throw new Error('Weight Given must be a positive number.');
+  }
+  if (!isFinite(tCarbs) || tCarbs < 0) {
+    throw new Error('Total Carbs must be a non-negative number.');
+  }
+
+  var ss    = SpreadsheetApp.getActive();
+  var sheet = ss.getActiveSheet();
+  var name  = sheet.getName();
+
+  if (MEAL_SHEETS.indexOf(name) === -1) {
+    throw new Error('Active sheet "' + name + '" is not a meal sheet.');
+  }
+
+  // Find next available Food block in column C:
+  // blocks start at rows 2, 7, 12, 17, ... 57
+  var colC = 3;
+  var targetRow = null;
+  for (var r = 2; r <= 57; r += 5) {
+    var foodVal = sheet.getRange(r, colC).getDisplayValue().trim();
+    if (!foodVal) {
+      targetRow = r;
+      break;
+    }
+  }
+  if (!targetRow) {
+    throw new Error('No empty food slot available on this sheet.');
+  }
+
+  var rowFood     = targetRow;       // Food:
+  var rowCarbFact = targetRow + 1;   // Carb factor: (has your VLOOKUP)
+  var rowWeight   = targetRow + 2;   // Total weight given:
+  var rowNetCarbs = targetRow + 3;   // Total net carbs:
+
+  // 1) Use the existing dropdown option to satisfy validation
+  var CUSTOM_FOOD_NAME = 'Custom (1:1)';
+  sheet.getRange(rowFood, colC).setValue(CUSTOM_FOOD_NAME);
+
+  // 1b) Write the Meal Title into the D cell beside the Food
+  sheet.getRange(rowFood, colC + 1).setValue(title); // column D
+
+  // 2) Do NOT overwrite the Carb Factor cell (rowCarbFact).
+  //    Your sheet's formula (VLOOKUP) will pull 1.0 from Food Chart.
+
+  // 3) Write portion weight and portion net carbs into this block
+  sheet.getRange(rowWeight,   colC).setValue(wGiven);
+  sheet.getRange(rowNetCarbs, colC).setValue(tCarbs);
+
+  // 4) Store Meal Builder breakdown in the dedicated section:
+  //    U4: Food, V4: Carb Factor, W4: Weight Given, X4: Net Carbs
+  //    Z4/Z5/Z6/Z8/Z9 = labels, AA4/5/6/8/9 = values.
+  //    We only ever store ONE breakdown per sheet (per day).
+  var START_ROW_MB = 5;      // first ingredient row (under U4:X4)
+  var MAX_ROWS_MB  = 20;     // capacity for ingredient rows
+  var COL_U        = 21;     // U
+  var NUM_MB_COLS  = 4;      // U,V,W,X
+
+  // Clear previous MB grid + totals
+  sheet.getRange(START_ROW_MB, COL_U, MAX_ROWS_MB, NUM_MB_COLS).clearContent();
+  sheet.getRangeList(['AA4','AA5','AA6','AA8','AA9']).clearContent();
+
+  // Write ingredients from payload.ingredients
+  var ingredients = Array.isArray(payload.ingredients) ? payload.ingredients : [];
+  var mbRows = [];
+  ingredients.forEach(function(ing) {
+    ing = ing || {};
+    var food   = String(ing.food   || '').trim();
+    var icf    = String(ing.cf     || '').trim();
+    var iwt    = String(ing.weight || '').trim();
+    var icarbs = String(ing.carbs  || '').trim();
+    if (!food && !icf && !iwt && !icarbs) return;
+    mbRows.push([food, icf, iwt, icarbs]);
+  });
+
+  if (mbRows.length > 0) {
+    var toWrite = mbRows.slice(0, MAX_ROWS_MB);
+    sheet.getRange(START_ROW_MB, COL_U, toWrite.length, NUM_MB_COLS)
+         .setValues(toWrite);
+  }
+
+  // Write totals into AA cells
+  sheet.getRange('AA4').setValue(rNet);   // Total Net Carbs (recipe)
+  sheet.getRange('AA5').setValue(rWt);    // Total Weight (recipe)
+  sheet.getRange('AA6').setValue(cf);     // Total Carb Factor
+  sheet.getRange('AA8').setValue(wGiven); // Weight Given (portion)
+  sheet.getRange('AA9').setValue(tCarbs); // Total Carbs (portion)
+
+  return {
+    sheet: name,
+    startRow: targetRow,
+    title: title,
+    totalCarbFactor: cf,
+    weightGiven: wGiven,
+    totalCarbs: tCarbs
+  };
+}
+
+
+
+
+/**
+ * Return the food chart as an array of { name, cf }.
+ * Uses the same range as your dropdown/VLOOKUP: 'Food Chart'!A2:B1000
+ */
+function MealBuilder_getFoodChart() {
+  var ss = SpreadsheetApp.getActive();
+  var sh = ss.getSheetByName(FOOD_CHART_SHEET);
+  if (!sh) {
+    throw new Error('Food chart sheet "' + FOOD_CHART_SHEET + '" not found.');
+  }
+
+  // Same range you use in the sheet: A2:B1000
+  var values = sh.getRange('A2:B1000').getValues();
+  var out = [];
+  for (var i = 0; i < values.length; i++) {
+    var name = values[i][0];
+    var cf   = values[i][1];
+    if (!name) continue; // skip empty rows
+    out.push({
+      name: String(name).trim(),
+      cf: (cf !== '' && cf != null) ? String(cf).trim() : ''
+    });
+  }
+  return out;
+}
+
+/**
+ * Debug helper: run this from the script editor to confirm
+ * the Food chart sheet is being read correctly.
+ */
+function debug_FoodChart() {
+  var data = MealBuilder_getFoodChart();
+  Logger.log('Food chart rows: ' + data.length);
+  if (data.length) {
+    Logger.log(JSON.stringify(data.slice(0, 5)));
+  }
+}

@@ -1,0 +1,174 @@
+/************************************************************
+ * Nightscout → Google Sheets BG sync (Apps Script, ES5-safe)
+ * - Pulls latest BG and "age" from Nightscout.
+ * - Writes BG (mmol/L, 1 decimal) to F6 and "X minutes ago" to G6.
+ * - While F15 is blank: update F6 and G6 each run.
+ * - Once F15 has a value: stop updating F6 (keep last value) and clear G6.
+ * - Targets the sheets listed in SHEETS_TO_UPDATE.
+ ************************************************************/
+
+/** ======== CONFIG ======== **/
+var BASE_URL = 'https://sennaloop-673ad2782247.herokuapp.com'; // Nightscout root, no trailing slash
+var TOKEN    = ''; // optional: Nightscout read token ('' if not used)
+
+// Which sheets to update (add/remove names as needed)
+var SHEETS_TO_UPDATE = ['Breakfast', 'Morning Snack', 'Lunch', 'Afternoon Snack', 'Dinner', 'Evening Snack'];
+
+/** ======== MENU (optional convenience) ======== **/
+function onOpen() {
+  SpreadsheetApp.getUi()
+    .createMenu('BG Sync')
+    .addItem('Update F6/G6 now', 'updateMealSheetsF6G6')
+    .addItem('Create 5-min timer', 'createFiveMinuteTrigger_')
+    .addItem('Remove all timers', 'deleteAllTimeTriggers_')
+    .addToUi();
+}
+
+/** Create a 5-minute time-based trigger. */
+function createFiveMinuteTrigger_() {
+  deleteAllTimeTriggers_(); // Ensure only one trigger exists
+  ScriptApp.newTrigger('updateMealSheetsF6G6')
+    .timeBased()
+    .everyMinutes(5)
+    .create();
+  SpreadsheetApp.getActive().toast('5-minute BG sync timer installed.');
+}
+
+/** Deletes all time-based triggers for this script. */
+function deleteAllTimeTriggers_() {
+  var triggers = ScriptApp.getProjectTriggers();
+  for (var i = 0; i < triggers.length; i++) {
+    if (triggers[i].getHandlerFunction() === 'updateMealSheetsF6G6') {
+      ScriptApp.deleteTrigger(triggers[i]);
+    }
+  }
+  SpreadsheetApp.getActive().toast('All 5-minute BG sync timers removed.');
+}
+
+/** ======== MAIN LOGIC ======== **/
+
+/**
+ * Main function run by the timer or menu. Iterates over meal sheets
+ * and updates F6/G6 if a bolus time (F15) hasn't been logged yet.
+ */
+function updateMealSheetsF6G6() {
+  var ss = SpreadsheetApp.getActive();
+  var bgResult = fetchLatestBG_();
+
+  if (!bgResult) {
+    Logger.log('BG Fetch failed. Skipping sheet updates.');
+    return;
+  }
+
+  SHEETS_TO_UPDATE.forEach(function(sheetName) {
+    var sh = ss.getSheetByName(sheetName);
+    if (!sh) {
+      Logger.log('Sheet not found: ' + sheetName);
+      return;
+    }
+
+    var bolusTime = String(sh.getRange('F15').getDisplayValue() || '').trim();
+
+    // Only update F6 (BG) and G6 (BG Age) if bolus time (F15) is empty.
+    if (!bolusTime) {
+      // F6 = BG value (mmol/L)
+      sh.getRange('F6').setValue(bgResult.mmol.toFixed(1));
+
+      // G6 = BG Age (X minutes ago)
+      var minutesAgo = Math.round(bgResult.msAgo / 60000);
+      var ageString = (minutesAgo < 1) ? 'now' : minutesAgo + ' mins ago';
+      sh.getRange('G6').setValue(ageString);
+      Logger.log('Updated ' + sheetName + ': BG=' + bgResult.mmol.toFixed(1) + ', Age=' + ageString);
+
+    } else {
+      // If F15 is not empty, stop updating F6 and clear G6.
+      // F6 keeps the last BG value that was there.
+      sh.getRange('G6').setValue('');
+      Logger.log('Skipped ' + sheetName + ': F15 is set.');
+    }
+  });
+}
+
+
+/** ======== NIGHTSCOUT API FETCH ======== **/
+
+/**
+ * Fetches the latest BG value and age from Nightscout.
+ * @returns {object|null} {mmol: number, msAgo: number}
+ */
+function fetchLatestBG_() {
+  // Helper to safely convert a value to a number
+  var toNumber = function(val) {
+    var s = String(val || '').trim().replace(',', '.');
+    return Number(s);
+  };
+
+  // Helper to safely get the timestamp (ms)
+  var getDateMs = function(obj) {
+    var dateStr = obj.date || obj.timestamp;
+    return dateStr ? new Date(dateStr).getTime() : NaN;
+  };
+
+  // Helper to round to 1 decimal place
+  var round1 = function(n) {
+    return Math.round(n * 10) / 10;
+  };
+
+  // Helper to safely retrieve the first defined value from keys in an object
+  var firstDefined = function(obj, keys) {
+    if (!obj || typeof obj !== 'object') return null;
+    for (var i = 0; i < keys.length; i++) {
+      var k = keys[i];
+      if (obj[k] !== null && obj[k] !== undefined) return obj[k];
+    }
+    return null;
+  };
+
+  var root = BASE_URL;
+  var qs = TOKEN ? ('&token=' + TOKEN) : '';
+
+  var opts = {
+    method: 'get',
+    muteHttpExceptions: true
+  };
+
+  // 1) Primary API: /entries/current.json
+  var url1 = root + '/api/v1/entries/current.json?' + qs;
+  try {
+    var res1 = UrlFetchApp.fetch(url1, opts);
+    if (res1.getResponseCode() === 200) {
+      var data1 = JSON.parse(res1.getContentText());
+      var obj1  = (data1 && data1.length) ? data1[0] : data1; // Handle both single object and array response
+      if (obj1) {
+        var mgdl1   = toNumber(firstDefined(obj1, ['sgv', 'mgdl', 'sg']));
+        var dateMs1 = getDateMs(obj1);
+        if (isFinite(mgdl1) && isFinite(dateMs1)) {
+          return { mmol: round1(mgdl1 / 18), msAgo: Date.now() - dateMs1 };
+        }
+      }
+    }
+  } catch (e1) {
+    Logger.log('Nightscout fetch error (entries/current.json): ' + e1);
+  }
+
+  // 2) Fallback API: /entries/sgv.json?count=1
+  var url2 = root + '/api/v1/entries/sgv.json?count=1' + qs;
+  try {
+    var res2 = UrlFetchApp.fetch(url2, opts);
+    if (res2.getResponseCode() === 200) {
+      var arr = JSON.parse(res2.getContentText());
+      if (arr && arr.length) {
+        var e       = arr[0];
+        var mgdl2   = toNumber(firstDefined(e, ['sgv', 'mgdl', 'sg']));
+        var dateMs2 = getDateMs(e);
+        if (isFinite(mgdl2) && isFinite(dateMs2)) {
+          return { mmol: round1(mgdl2 / 18), msAgo: Date.now() - dateMs2 };
+        }
+      }
+    }
+  } catch (e2) {
+    Logger.log('Nightscout fetch error (entries/sgv.json): ' + e2);
+  }
+
+  return null; // Failed to fetch BG from both endpoints
+}

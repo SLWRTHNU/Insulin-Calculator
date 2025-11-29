@@ -1,0 +1,341 @@
+/************************************************************
+ * Global Food Search (recursive Drive crawl + index + sidebar)
+ * - Recursively scans ROOT_FOLDER_ID (incl. all subfolders)
+ * - Reads only Google Docs (application/vnd.google-apps.document)
+ * - Extracts every "Food:" line block from your daily export docs
+ * - Stores rows in "Food Search Index" sheet
+ * - Sidebar lets you search & highlights matches (substring on Food)
+ ************************************************************/
+
+/** ======== CONFIG (ADJUST THESE) ======== **/
+var ROOT_FOLDER_ID = '1MUasRBNZeNo_EWpMja6iQmJjF9uvtSiz';
+var INDEX_SHEET_NAME = 'Food Search Index';
+var MEAL_TITLES = [
+  'Breakfast', 'Morning Snack', 'Lunch',
+  'Afternoon Snack', 'Dinner', 'Evening Snack'
+];
+
+/** Add menu on open **/
+function onOpen_FoodSearchMenu() {
+  var ui = SpreadsheetApp.getUi();
+  ui.createMenu('Food Search')
+    .addItem('Open Food Search', 'FoodSearch_showSidebar')
+    .addToUi();
+}
+
+
+/** Show the sidebar **/
+function FoodSearch_showSidebar() {
+  var html = HtmlService.createHtmlOutputFromFile('FoodSearch_Sidebar')
+    .setTitle('Food Search');
+  SpreadsheetApp.getUi().showSidebar(html);
+}
+
+/************************************************************
+ * INDEX BUILDING
+ ************************************************************/
+
+/** Rebuild the index by recursively scanning ROOT_FOLDER_ID. */
+function FoodSearch_rebuildIndex() {
+  var ss = SpreadsheetApp.getActive();
+  var sh = ss.getSheetByName(INDEX_SHEET_NAME);
+  if (!sh) {
+    sh = ss.insertSheet(INDEX_SHEET_NAME);
+  }
+  sh.clear();
+
+  // Header row
+  sh.getRange(1, 1, 1, 9).setValues([[
+    'Date', 'Meal', 'Food', 'Carb Factor',
+    'Weight (g)', 'Net Carbs (g)',
+    'Doc Name', 'Doc URL', 'Snippet'
+  ]]);
+
+  var rootFolder = DriveApp.getFolderById(ROOT_FOLDER_ID);
+  var allEntries = [];
+  FoodSearch_processFolder_(rootFolder, allEntries);
+
+  if (allEntries.length > 0) {
+    sh.getRange(2, 1, allEntries.length, allEntries[0].length).setValues(allEntries);
+  }
+
+  return { count: allEntries.length };
+}
+
+/**
+ * Optional: Export today then rebuild index.
+ * If you have a daily-export function, call it here.
+ */
+function FoodSearch_forceExportAndIndex() {
+  // Example:
+  // DailyMealExport_RunToday();
+  return FoodSearch_rebuildIndex();
+}
+
+/** Recursively process a Drive folder. */
+function FoodSearch_processFolder_(folder, allEntries) {
+  // Process docs in this folder
+  var files = folder.getFiles();
+  while (files.hasNext()) {
+    var file = files.next();
+    if (file.getMimeType() === MimeType.GOOGLE_DOCS) {
+      FoodSearch_processDoc_(file, allEntries);
+    }
+  }
+
+  // Recurse into subfolders
+  var subFolders = folder.getFolders();
+  while (subFolders.hasNext()) {
+    var sub = subFolders.next();
+    FoodSearch_processFolder_(sub, allEntries);
+  }
+}
+
+/** Extract text and parse for food blocks from a single doc. */
+function FoodSearch_processDoc_(docFile, allEntries) {
+  var doc = DocumentApp.openById(docFile.getId());
+  var text = doc.getBody().getText();
+  var docName = docFile.getName();
+  var docUrl = docFile.getUrl();
+
+  // Try to detect a date from the doc name.
+  var dateObj = null;
+
+  // Case 1: "YYYY-MM-DD"
+  var match = docName.match(/(\d{4}-\d{2}-\d{2})/);
+  if (match) {
+    dateObj = new Date(match[1]); // yyyy-mm-dd
+  } else {
+    // Case 2: strings like "November 24 2025" or "November 24, 2025"
+    var parsed = new Date(docName);
+    if (!isNaN(parsed.getTime())) {
+      dateObj = parsed;
+    }
+  }
+
+  if (!dateObj) {
+    Logger.log('Skipping (no date found in name): ' + docName);
+    return;
+  }
+
+  // Strip time part
+  var dateOnly = new Date(dateObj.getFullYear(), dateObj.getMonth(), dateObj.getDate());
+
+  // Parse food blocks
+  var entries = FoodSearch_extractFoodBlocks_(text, docUrl, docName, dateOnly);
+  if (entries && entries.length) {
+    Array.prototype.push.apply(allEntries, entries);
+  }
+}
+
+/************************************************************
+ * PARSING FOOD BLOCKS FROM DOC TEXT
+ ************************************************************/
+
+/**
+ * Parses the raw text of a meal export document to find food blocks.
+ *
+ * Supports:
+ *  - Multi-line blocks:
+ *      Food: Eggs
+ *      Carb factor: 0.00
+ *      Total weight given: 2.5
+ *      Total net carbs: 0.00
+ *
+ *  - Single-line inline blocks:
+ *      Food: Eggs Carb factor: 0.00 Total weight given: 2.5 Total net carbs: 0.00 ...
+ */
+function FoodSearch_extractFoodBlocks_(text, docUrl, docName, dateObj) {
+  var lines = text.split('\n');
+  var foodEntries = [];
+  var currentMeal = '';
+  var i = 0;
+
+  while (i < lines.length) {
+    var line = lines[i].trim();
+
+    // Track which meal we are in
+    if (MEAL_TITLES.indexOf(line) !== -1) {
+      currentMeal = line;
+      i++;
+      continue;
+    }
+
+    // Start of a Food block
+    if (/^Food:\s*/i.test(line)) {
+
+      // CASE 1: Inline block with all fields on one line
+      if (/Carb factor:/i.test(line) &&
+          /Total weight given:/i.test(line) &&
+          /Total net carbs:/i.test(line)) {
+
+        var inlineRegex = /Food:\s*(.*?)\s+Carb factor:\s*([^\s]+)\s+Total weight given:\s*([^\s]+)\s+Total net carbs:\s*([^\s]+)/gi;
+        var m;
+
+        while ((m = inlineRegex.exec(line)) !== null) {
+          var food  = m[1].trim();
+          var cf    = m[2].trim();
+          var wt    = m[3].trim();
+          var carbs = m[4].trim();
+
+          var snippet = currentMeal ? currentMeal + ': ' + food : food;
+
+          foodEntries.push([
+            dateObj, currentMeal, food, cf, wt, carbs,
+            docName, docUrl, snippet
+          ]);
+        }
+
+        i++;
+        continue;
+      }
+
+      // CASE 2: Multi-line block (fields below the "Food:" line)
+      var foodVal = line.replace(/^Food:\s*/i, '').trim();
+      var cfVal = '';
+      var wtVal = '';
+      var carbVal = '';
+
+      for (var k = 1; k <= 3 && (i + k) < lines.length; k++) {
+        var ln = lines[i + k].trim();
+        if (/^Carb factor:\s*/i.test(ln)) {
+          cfVal = ln.replace(/^Carb factor:\s*/i, '').trim();
+        } else if (/^Total weight given:\s*/i.test(ln)) {
+          wtVal = ln.replace(/^Total weight given:\s*/i, '').trim();
+        } else if (/^Total net carbs:\s*/i.test(ln)) {
+          carbVal = ln.replace(/^Total net carbs:\s*/i, '').trim();
+        }
+      }
+
+      var snippet2 = currentMeal ? currentMeal + ': ' + foodVal : foodVal;
+
+      foodEntries.push([
+        dateObj, currentMeal, foodVal, cfVal, wtVal, carbVal,
+        docName, docUrl, snippet2
+      ]);
+
+      i += 4;
+      continue;
+    }
+
+    i++;
+  }
+
+  return foodEntries;
+}
+
+/************************************************************
+ * SEARCH API FOR SIDEBAR
+ ************************************************************/
+
+/**
+ * Sidebar API: Queries the index sheet based on user input.
+ * Matches rows where the Food field contains the typed text
+ * as a substring (case-insensitive) and sorts by date desc.
+ */
+function FoodSearch_query(query) {
+  var rawQ = String(query || '').trim();
+  var q = rawQ.toLowerCase();
+
+  var ss = SpreadsheetApp.getActive();
+  var sh = ss.getSheetByName(INDEX_SHEET_NAME);
+  if (!sh) {
+    return { rows: [], msg: 'Index sheet not found. Click "Rebuild Index".' };
+  }
+
+  var range = sh.getDataRange();
+  if (range.getNumRows() <= 1) {
+    return { rows: [], msg: 'Index is empty. Click "Rebuild Index".' };
+  }
+
+  if (!q) {
+    return { rows: [], msg: '' };
+  }
+
+  var vals = range.getValues();
+  vals.shift(); // remove header row
+
+  var out = [];
+
+  // Column layout:
+  // 0: Date, 1: Meal, 2: Food, 3: CF, 4: Wt, 5: Carbs, 6: Doc Name, 7: Doc URL, 8: Snippet
+  for (var r = 0; r < vals.length; r++) {
+    var dateVal = vals[r][0];
+    var dateStr;
+    var ts = 0;
+
+    if (dateVal instanceof Date) {
+      dateStr = Utilities.formatDate(
+        dateVal,
+        ss.getSpreadsheetTimeZone(),
+        'EEE MMM d yyyy'
+      );
+      ts = dateVal.getTime();
+    } else {
+      dateStr = String(dateVal || '');
+      var parsed = new Date(dateStr);
+      if (!isNaN(parsed.getTime())) {
+        ts = parsed.getTime();
+      }
+    }
+
+    var meal    = String(vals[r][1] || '');
+    var food    = String(vals[r][2] || '');
+    var cf      = String(vals[r][3] || '');
+    var wt      = String(vals[r][4] || '');
+    var carbs   = String(vals[r][5] || '');
+    var docName = String(vals[r][6] || '');
+    var docUrl  = String(vals[r][7] || '');
+    var snippet = String(vals[r][8] || '');
+
+    // Substring match on Food only (case-insensitive)
+    if (food.toLowerCase().indexOf(q) === -1) continue;
+
+    out.push({
+      _ts: ts,           // timestamp for sorting
+      date: dateStr,
+      meal: meal,
+      food: food,
+      cf: cf,
+      wt: wt,
+      carbs: carbs,
+      docName: docName,
+      docUrl: docUrl,
+      snippet: snippet
+    });
+  }
+
+  // Sort by timestamp descending (most recent first)
+  out.sort(function(a, b) {
+    return b._ts - a._ts;
+  });
+
+  // Strip internal sort field before returning
+  var cleaned = out.map(function(r) {
+    return {
+      date: r.date,
+      meal: r.meal,
+      food: r.food,
+      cf: r.cf,
+      wt: r.wt,
+      carbs: r.carbs,
+      docName: r.docName,
+      docUrl: r.docUrl,
+      snippet: r.snippet
+    };
+  });
+
+  return { rows: cleaned, msg: '' };
+}
+
+
+/** Sidebar API: show index row count. */
+function FoodSearch_indexCounts_() {
+  var ss = SpreadsheetApp.getActive();
+  var sh = ss.getSheetByName(INDEX_SHEET_NAME);
+  if (!sh) return { count: 0 };
+
+  var lastRow = sh.getLastRow();
+  var count = Math.max(0, lastRow - 1); // exclude header
+  return { count: count };
+}
