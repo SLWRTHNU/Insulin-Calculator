@@ -22,8 +22,7 @@ function ClearMealChart() {
   sh.getRangeList(['F9','F10','F15','F17']).clear({contentsOnly:true, skipFilteredRows:true});
 
   // F16: Desired start time = F15 + FIRST DIGIT of F6 (in minutes)
-  // (e.g., F6=7.9 and F15=12:01 PM -> F16=12:08 PM)
-sh.getRange('F16').setFormula('=IF(OR(F6="",F15=""),"", F15 + TRUNC(N(F6),0)/1440)');
+  sh.getRange('F16').setFormula('=IF(OR(F6="",F15=""),"", F15 + TRUNC(N(F6),0)/1440)');
 
   // F18: "Time between" = minutes between F17 and F15
   sh.getRange('F18').setFormula('=IF(OR(F17="",F15=""),"", ROUND((F17 - F15) * 24 * 60, 0) & " minutes")');
@@ -31,12 +30,19 @@ sh.getRange('F16').setFormula('=IF(OR(F6="",F15=""),"", F15 + TRUNC(N(F6),0)/144
   // Clear column D values (leave formatting)
   sh.getRange('D:D').clear({contentsOnly:true, skipFilteredRows:true});
 
- // Clear Post-Bolus Tracking blocks
+  // Clear Post-Bolus Tracking blocks
   sh.getRangeList(['L5:L10','N5:N10','O5:O10','P5:P10'])
+    .clear({contentsOnly:true, skipFilteredRows:true});
+
+  // NEW: Clear Meal Builder helper ranges
+  sh.getRangeList(['U5:U24','V5:V24','W5:W24','X5:X24'])
+    .clear({contentsOnly:true, skipFilteredRows:true});
+  sh.getRangeList(['AA4:AA6','AA8','AA9'])
     .clear({contentsOnly:true, skipFilteredRows:true});
 
   sh.getRange('A1').activate();
 }
+
 
 function ClearCarbCalculator() {
   var spreadsheet = SpreadsheetApp.getActive();
