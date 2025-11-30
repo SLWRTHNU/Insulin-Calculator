@@ -389,6 +389,27 @@ function DailyExport_buildMealNote_(sh, sheetName) {
     }
   })();
 
+  
+  /********************************************************
+
+   * 5) Notes block (E23–E25)
+
+   ********************************************************/
+  (function () {
+    var notes = [];
+    for (var r = 23; r <= 25; r++) {
+      var txt = val('E' + r);
+      if (txt) notes.push(txt);
+    }
+    if (notes.length) {
+      lines.push('');
+      lines.push('Notes:');
+      for (var i = 0; i < notes.length; i++) {
+        lines.push(notes[i]);
+      }
+    }
+  })();
+
   /********************************************************
    * 5) Post-Meal BG tracking block (L5:P10)
    ********************************************************/
@@ -407,25 +428,30 @@ function DailyExport_buildMealNote_(sh, sheetName) {
 
     lines.push('');
     lines.push('Post-Meal BG Tracking');
-    lines.push('Time\tMins\tBG\tTrend\tDelta');
 
-    for (var r3 = 5; r3 <= 10; r3++) {
-      var time   = val('L' + r3);
-      var mins   = val('M' + r3);
-      var bg     = oneDp(val('N' + r3));
-      var trend  = val('O' + r3);
-      var delta  = val('P' + r3);
+    for (var r2 = 5; r2 <= 10; r2++) {
+  var time   = val('L' + r2);
+  var minsRaw = val('M' + r2); // 30, 60, 90, ...
+  var mins   = minsRaw ? ('+' + minsRaw + ' mins') : '';
+  var bg     = val('N' + r2);
+  var trend  = val('O' + r2);
+  var delta  = val('P' + r2);
 
-      if (!time && !mins && !bg && !trend && !delta) continue;
+  if (!time && !mins && !bg && !trend && !delta) continue;
 
-      lines.push(
-        (time  || '') + '\t' +
-        (mins  || '') + '\t' +
-        (bg    || '') + '\t' +
-        (trend || '') + '\t' +
-        (delta || '')
-      );
-    }
+  if (delta && /^[+\-]/.test(delta)) {
+    delta = delta[0] + ' ' + delta.slice(1);
+  }
+
+  lines.push(
+    (time  || '') + '\t' +
+    (mins  || '') + '\t' +
+    (bg    || '') + '\t' +
+    (trend || '') + '\t' +
+    (delta || '')
+  );
+}
+
   }
 
   return lines.join('\n');
