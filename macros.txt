@@ -16,10 +16,9 @@ function ClearMealChart() {
   if (toBlank.length) sh.getRangeList(toBlank).setValue('');
   if (toBlankHeaders.length) sh.getRangeList(toBlankHeaders).setValue('');
 
-  // Clear key inputs (keep formatting)
-  // F9 = Meal IOB, F10 = Correction IOB,
-  // F15 = bolus-at time (manual), F17 = meal start time (manual)
-  sh.getRangeList(['F9','F10','F15','F17']).clear({contentsOnly:true, skipFilteredRows:true});
+  // Clear key inputs (keep formatting) + clear Notes (E23:E25)
+  sh.getRangeList(['F9','F10','F15','F17','E23','E24','E25'])
+    .clear({contentsOnly:true, skipFilteredRows:true});
 
   // F16: Desired start time = F15 + FIRST DIGIT of F6 (in minutes)
   sh.getRange('F16').setFormula('=IF(OR(F6="",F15=""),"", F15 + TRUNC(N(F6),0)/1440)');
@@ -35,13 +34,14 @@ function ClearMealChart() {
     .clear({contentsOnly:true, skipFilteredRows:true});
 
   // NEW: Clear Meal Builder helper ranges
-  sh.getRangeList(['U5:U24','V5:V24','W5:W24','X5:X24'])
+  sh.getRangeList(['U5:U24','V5:V24','W5:W24','X5:W24'])
     .clear({contentsOnly:true, skipFilteredRows:true});
   sh.getRangeList(['AA4:AA6','AA8','AA9'])
     .clear({contentsOnly:true, skipFilteredRows:true});
 
   sh.getRange('A1').activate();
 }
+
 
 
 function ClearCarbCalculator() {
