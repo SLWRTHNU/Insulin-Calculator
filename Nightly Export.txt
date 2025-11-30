@@ -19,7 +19,13 @@ var MEAL_TITLES = MEAL_SHEETS; // For search index parsing
 function onOpen_DailyExportMenu() {
   SpreadsheetApp.getUi()
     .createMenu('Daily Export')
-    .addItem('Export Today', 'DailyExport_exportNow')
+    .addItem('Export today', 'DailyExport_exportNow')
+    .addToUi();
+
+  SpreadsheetApp.getUi()
+    .createMenu('Food Search')
+    .addItem('Open Food Search…', 'FoodSearch_showSidebar')
+    .addItem('Rebuild Index (scan Drive)', 'FoodSearch_rebuildIndex')
     .addToUi();
 }
 
@@ -126,19 +132,12 @@ function DailyExport_exportNow() {
 
  
   try {
-
     // This function is defined in FoodSearch.gs
-
     var info = FoodSearch_rebuildIndex();
-
     Logger.log('FoodSearch_rebuildIndex completed: ' + JSON.stringify(info));
-
   } catch (e) {
-
     Logger.log('FoodSearch_rebuildIndex failed: ' + e);
-
   }
-
 }
 
 
@@ -219,18 +218,94 @@ function DailyExport_buildMealNote_(sh, sheetName) {
   // helper to format numbers cleanly
   var fmtNum = function(v, decimals) {
     var n = parseFloat(v);
-    if (isNaN(n)) return v; // not a number, return as-is
+    if (isNaN(n)) return v;
     var factor = Math.pow(10, decimals);
     n = Math.round(n * factor) / factor;
     var s = n.toFixed(decimals);
-    s = s.replace(/\.0+$/, '')
-         .replace(/(\.\d*[1-9])0+$/, '$1');
+    s = s
+      .replace(/\.0+$/, '')
+      .replace(/(\.\d*[1-9])0+$/, '$1');
     return s;
   };
 
   var lines = [];
 
-  // ===== Food blocks: rows 2..57 stepping by 5 =====
+  /********************************************************
+   * 1) Meal Builder section (U5:X, AA4/5/6/8/9)
+   *    Printed first, in the same "Food:" block style
+   *    as the main meal, wrapped in a titled section.
+   ********************************************************/
+  (function () {
+    // detect if there is any MB data
+    var hasMB = false;
+    for (var r = 5; r <= 24; r++) {
+      if (val('U' + r) || val('V' + r) || val('W' + r) || val('X' + r)) {
+        hasMB = true;
+        break;
+      }
+    }
+    if (!hasMB) return;
+
+    // find recipe title from Custom (1:1) row's description in column D
+    var recipeTitle = '';
+    for (var row = 2; row <= 57; row += 5) {
+      var foodName = val('C' + row);
+      var desc     = val('D' + row);
+      if (foodName === 'Custom (1:1)' && desc) {
+        recipeTitle = desc;
+        break;
+      }
+    }
+
+    var header = '----- ' + (recipeTitle || 'Meal Builder') + ' -----';
+    lines.push(header);
+
+    // per-ingredient blocks from U/V/W/X
+    for (var r2 = 5; r2 <= 24; r2++) {
+      var food  = val('U' + r2);
+      var cf    = val('V' + r2);
+      var wt    = val('W' + r2);
+      var carbs = val('X' + r2);
+
+      if (!food && !cf && !wt && !carbs) continue;
+
+      if (wt)    wt    = fmtNum(wt, 2);
+      if (carbs) carbs = fmtNum(carbs, 2);
+
+      lines.push('Food:\t'               + (food  || ''));
+      lines.push('Carb factor:\t'        + (cf    || ''));
+      lines.push('Total weight given:\t' + (wt    || ''));
+      lines.push('Total net carbs:\t'    + (carbs || ''));
+      lines.push('');
+    }
+
+    // totals from AA4/5/6/8/9
+    var tNet   = val('AA4');
+    var tWt    = val('AA5');
+    var tCF    = val('AA6');
+    var wGiven = val('AA8');
+    var tPort  = val('AA9');
+
+    if (tNet || tWt || tCF || wGiven || tPort) {
+      if (tNet)  tNet  = fmtNum(tNet, 2);
+      if (tWt)   tWt   = fmtNum(tWt, 2);
+      if (tPort) tPort = fmtNum(tPort, 2);
+
+      if (tNet  !== undefined && tNet  !== '') lines.push('Total Net Carbs\t'   + tNet);
+      if (tWt   !== undefined && tWt   !== '') lines.push('Total Weight\t'      + tWt);
+      if (tCF   !== undefined && tCF   !== '') lines.push('Total Carb Factor\t' + tCF);
+      lines.push('');
+      if (wGiven !== undefined && wGiven !== '') lines.push('Weight Given\t' + wGiven);
+      if (tPort  !== undefined && tPort  !== '') lines.push('Total Carbs\t'  + tPort);
+    }
+
+    lines.push('----------');
+    lines.push('');
+  })();
+
+  /********************************************************
+   * 2) Standard food blocks (C/B rows)
+   ********************************************************/
   for (var start = 2; start <= 57; start += 5) {
     var rows = [
       { label: val('B' + start)     || 'Food:',               r: start     },
@@ -261,74 +336,23 @@ function DailyExport_buildMealNote_(sh, sheetName) {
     for (var k2 = 0; k2 < rows.length; k2++) {
       lines.push(rows[k2].label + '\t' + cdVals[k2]);
     }
-
     lines.push('');
   }
 
-  // ===== Meal Builder breakdown (U4:X, AA totals) =====
-  (function () {
-    // Check if there is any ingredient data in U5:X
-    var hasMB = false;
-    for (var r = 5; r <= 40; r++) {
-      if (val('U' + r) || val('V' + r) || val('W' + r) || val('X' + r)) {
-        hasMB = true;
-        break;
-      }
-    }
-    if (!hasMB) return;
-
-    lines.push('');
-    lines.push('Meal Builder');
-
-    // Header row similar style to BG chart
-    lines.push('Food\tCarb factor\tWeight given\tNet carbs');
-
-    for (var r2 = 5; r2 <= 40; r2++) {
-      var food  = val('U' + r2);
-      var cf    = val('V' + r2);
-      var wt    = val('W' + r2);
-      var nc    = val('X' + r2);
-      if (!food && !cf && !wt && !nc) continue;
-
-      lines.push(
-        (food || '') + '\t' +
-        (cf   || '') + '\t' +
-        (wt   || '') + '\t' +
-        (nc   || '')
-      );
-    }
-
-    // Totals from AA4/5/6/8/9
-    var tNet  = val('AA4');
-    var tWt   = val('AA5');
-    var tCf   = val('AA6');
-    var wGiv  = val('AA8');
-    var tPort = val('AA9');
-
-    if (tNet || tWt || tCf || wGiv || tPort) {
-      lines.push('');
-      lines.push('Meal Builder Totals');
-      if (tNet)  lines.push('Total net carbs (recipe):\t' + tNet);
-      if (tWt)   lines.push('Total weight (recipe):\t'     + tWt);
-      if (tCf)   lines.push('Total carb factor:\t'         + tCf);
-      if (wGiv)  lines.push('Weight given (portion):\t'    + wGiv);
-      if (tPort) lines.push('Total carbs (portion):\t'     + tPort);
-    }
-  })();
-
-  // ===== Summary block =====
-  lines.push('');
-  lines.push('Carb Ratio:   ' + val('F2'));
-  lines.push('Target:   ' + val('F3'));
-  lines.push('Correction Factor:   ' + val('F4'));
+  /********************************************************
+   * 3) Summary block
+   ********************************************************/
+  lines.push('Carb Ratio:   '          + val('F2'));
+  lines.push('Target:   '              + val('F3'));
+  lines.push('Correction Factor:   '   + val('F4'));
   lines.push('');
   lines.push('Current BG (mmol/L):   ' + val('F6'));
   lines.push('Total Net Carbs (g):   ' + val('F7'));
   lines.push('');
-  lines.push('Meal IOB:   ' + val('F9'));
-  lines.push('Correction IOB:   ' + val('F10'));
+  lines.push('Meal IOB:   '            + val('F9'));
+  lines.push('Correction IOB:   '      + val('F10'));
 
-  // Total Bolus
+  // Total Bolus: first non-empty candidate cell
   var totalBolus = '';
   var candidates = ['I23','I25','F10','I2','I15'];
   for (var i = 0; i < candidates.length; i++) {
@@ -338,7 +362,9 @@ function DailyExport_buildMealNote_(sh, sheetName) {
   lines.push('Total Bolus:   ' + totalBolus);
   lines.push('');
 
-  // Timing block
+  /********************************************************
+   * 4) Timing block
+   ********************************************************/
   (function () {
     var f15  = val('F15'); // bolus time
     var f17  = val('F17'); // meal start time
@@ -353,7 +379,7 @@ function DailyExport_buildMealNote_(sh, sheetName) {
     })();
 
     if (f15) {
-      lines.push(f15 + (dose ? (' - Bolused ' + dose) : ' - Bolused'));
+      lines.push(f15 + (dose ? (' - Bolused ' + dose + ' U') : ' - Bolused'));
     }
     if (f17) {
       lines.push(f17 + ' - ' + sheetName + ' started');
@@ -363,10 +389,12 @@ function DailyExport_buildMealNote_(sh, sheetName) {
     }
   })();
 
-  // Post-Meal BG tracking block (L5:P10)
+  /********************************************************
+   * 5) Post-Meal BG tracking block (L5:P10)
+   ********************************************************/
   var hasTracking = false;
-  for (var r3 = 5; r3 <= 10; r3++) {
-    if (val('N' + r3)) { hasTracking = true; break; }
+  for (var r2 = 5; r2 <= 10; r2++) {
+    if (val('N' + r2)) { hasTracking = true; break; }
   }
 
   if (hasTracking) {
@@ -379,13 +407,14 @@ function DailyExport_buildMealNote_(sh, sheetName) {
 
     lines.push('');
     lines.push('Post-Meal BG Tracking');
+    lines.push('Time\tMins\tBG\tTrend\tDelta');
 
-    for (var r4 = 5; r4 <= 10; r4++) {
-      var time   = val('L' + r4);
-      var mins   = val('M' + r4);
-      var bg     = val('N' + r4);
-      var trend  = val('O' + r4);
-      var delta  = val('P' + r4);
+    for (var r3 = 5; r3 <= 10; r3++) {
+      var time   = val('L' + r3);
+      var mins   = val('M' + r3);
+      var bg     = oneDp(val('N' + r3));
+      var trend  = val('O' + r3);
+      var delta  = val('P' + r3);
 
       if (!time && !mins && !bg && !trend && !delta) continue;
 
@@ -394,13 +423,14 @@ function DailyExport_buildMealNote_(sh, sheetName) {
         (mins  || '') + '\t' +
         (bg    || '') + '\t' +
         (trend || '') + '\t' +
-        (delta ? delta.replace(/^([+\-])/, '$1 ') : '')
+        (delta || '')
       );
     }
   }
 
   return lines.join('\n');
 }
+
 
 /**
  * If the given food block (starting at startRow) has a Meal Builder
@@ -524,9 +554,43 @@ function DailyExport_extractFoods_(sh) {
   return out;
 }
 
+
+
 /************************************************************
  * OPTIONAL: FULL INDEX REBUILD (from all Docs in ROOT_FOLDER_ID)
  ************************************************************/
+
+// Menu-friendly wrapper that rebuilds the index and returns a small status object
+function FoodSearch_rebuildIndex() {
+  var ss = SpreadsheetApp.getActive();
+  var sh = ss.getSheetByName(INDEX_SHEET_NAME);
+  if (!sh) {
+    sh = ss.insertSheet(INDEX_SHEET_NAME);
+  }
+  sh.clear();
+
+  // Header row
+  sh.getRange(1, 1, 1, 9).setValues([[
+    'Date', 'Meal', 'Food', 'Carb Factor',
+    'Weight (g)', 'Net Carbs (g)',
+    'Doc Name', 'Doc URL', 'Snippet'
+  ]]);
+
+  var rootFolder = DriveApp.getFolderById(ROOT_FOLDER_ID);
+  var allEntries = [];
+
+  // Re-use your existing folder walker in this file
+  FoodSearch_processFolderForIndex_(rootFolder, allEntries);
+
+  if (allEntries.length > 0) {
+    sh.getRange(2, 1, allEntries.length, allEntries[0].length)
+      .setValues(allEntries);
+  }
+
+  return { count: allEntries.length };
+}
+
+
 function FoodSearch_fullRebuildIndexFromDocs_() {
   var ss = SpreadsheetApp.getActive();
   var sh = ss.getSheetByName(INDEX_SHEET_NAME);
