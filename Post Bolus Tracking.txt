@@ -169,10 +169,10 @@ function ns_arrow_(direction) {
   if (d === 'flat')          return '→';
   if (d === 'fortyfiveup')   return '↗';
   if (d === 'singleup')      return '↑';
-  if (d === 'doubleup')      return '⇑';
+  if (d === 'doubleup')      return '↑↑';
   if (d === 'fortyfivedown') return '↘';
   if (d === 'singledown')    return '↓';
-  if (d === 'doubledown')    return '⇓';
+  if (d === 'doubledown')    return '↓↓';
   return '';
 }
 
