@@ -1,0 +1,618 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #f4f6f9;
+      --surface: #ffffff;
+      --surface2: #f0f2f5;
+      --border: #dde1e8;
+      --border-focus: #4CAF50;
+      --text: #222;
+      --text-muted: #666;
+      --text-dim: #aaa;
+      --accent: #4CAF50;
+      --accent-glow: rgba(76,175,80,0.12);
+      --green: #43a047;
+      --yellow: #f5a623;
+      --red: #e53935;
+      --blue: #1e88e5;
+      --mono: 'DM Mono', monospace;
+      --sans: 'DM Sans', sans-serif;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--sans);
+      padding: 16px;
+      font-size: 13px;
+    }
+
+    /* ── Cards ── */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+      margin-bottom: 12px;
+    }
+    .card-header {
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      font-family: var(--mono);
+      font-size: 9px;
+      letter-spacing: 0.13em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      background: var(--surface2);
+    }
+    .card-header .dot {
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .card-body { padding: 14px; }
+
+    /* ── Fields ── */
+    .field { margin-bottom: 11px; }
+    .field:last-child { margin-bottom: 0; }
+
+    .field label {
+      display: block;
+      font-size: 0.85em;
+      font-weight: bold;
+      color: var(--text);
+      margin-bottom: 5px;
+    }
+
+    .field input[type="text"],
+    .field input[type="number"],
+    .field select {
+      width: 100%;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      font-family: var(--sans);
+      font-size: 13px;
+      padding: 8px 10px;
+      outline: none;
+      transition: border-color 0.2s, box-shadow 0.2s;
+      appearance: none;
+      -webkit-appearance: none;
+    }
+    .field select {
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='7' viewBox='0 0 10 7'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23999' stroke-width='1.4' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 10px center;
+      padding-right: 28px;
+      cursor: pointer;
+      background-color: var(--surface);
+    }
+    .field input:focus,
+    .field select:focus {
+      border-color: var(--border-focus);
+      box-shadow: 0 0 0 3px var(--accent-glow);
+    }
+    .field input:disabled {
+      background: var(--surface2);
+      color: var(--text-muted);
+      cursor: default;
+    }
+    .field input::placeholder { color: var(--text-dim); }
+
+    /* ── Two-col row ── */
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 11px; }
+    .row .field { margin-bottom: 0; }
+
+    /* ── Autocomplete ── */
+    .autocomplete-wrap { position: relative; }
+    .match-list {
+      position: absolute;
+      top: calc(100% + 3px);
+      left: 0; right: 0;
+      background: var(--surface);
+      border: 1px solid var(--border-focus);
+      border-radius: 6px;
+      max-height: 110px;
+      overflow-y: auto;
+      z-index: 200;
+      display: none;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.1);
+    }
+    .match-item {
+      padding: 7px 10px;
+      font-size: 12px;
+      cursor: pointer;
+      color: var(--text);
+      border-bottom: 1px solid var(--border);
+      transition: background 0.1s;
+    }
+    .match-item:last-child { border-bottom: none; }
+    .match-item:hover { background: #e8f5e9; color: var(--green); }
+
+    .field-status {
+      font-size: 0.8em;
+      margin-top: 4px;
+      font-weight: bold;
+    }
+    .status-error { color: var(--red); }
+
+    /* ── Checkbox ── */
+    .checkbox-row {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      padding: 8px 10px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      cursor: pointer;
+      transition: border-color 0.2s;
+      margin-bottom: 11px;
+    }
+    .checkbox-row:hover { border-color: var(--border-focus); }
+    .checkbox-row input[type="checkbox"] {
+      width: 14px; height: 14px;
+      accent-color: var(--accent);
+      cursor: pointer;
+      flex-shrink: 0;
+      padding: 0; border: 0; border-radius: 0;
+    }
+    .checkbox-row span { font-size: 12px; color: var(--text-muted); user-select: none; }
+
+    /* ── Absorption panel ── */
+    .abs-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+    .abs-box {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 9px;
+      padding: 10px 12px;
+      text-align: center;
+    }
+    .abs-box.highlight {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 1px var(--accent-glow), inset 0 0 12px var(--accent-glow);
+    }
+    .abs-box .abs-label {
+      font-size: 9px;
+      font-family: var(--mono);
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--text-muted);
+      margin-bottom: 5px;
+    }
+    .abs-box .abs-val {
+      font-family: var(--mono);
+      font-size: 22px;
+      font-weight: 500;
+      line-height: 1;
+      color: var(--green);
+    }
+    .abs-box .abs-cat {
+      font-size: 14px;
+      font-weight: bold;
+      line-height: 1;
+      margin-top: 4px;
+    }
+    .abs-box .abs-sub {
+      font-size: 9px;
+      color: var(--text-muted);
+      margin-top: 3px;
+      font-family: var(--mono);
+    }
+
+    /* ── Speed bar ── */
+    .speed-bar {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 9px;
+      padding: 10px 12px;
+    }
+    .speed-bar-labels {
+      display: flex;
+      justify-content: space-between;
+      font-size: 9px;
+      color: var(--text-muted);
+      margin-bottom: 7px;
+    }
+    .speed-track {
+      height: 6px;
+      background: #e9e9e9;
+      border-radius: 99px;
+      overflow: hidden;
+    }
+    .speed-fill {
+      height: 100%;
+      border-radius: 99px;
+      background: var(--yellow);
+      width: 33%;
+      transition: width 0.4s ease, background 0.4s ease;
+    }
+    .speed-ticks {
+      display: flex;
+      justify-content: space-between;
+      margin-top: 4px;
+    }
+    .speed-tick { font-size: 0.65em; color: var(--text-dim); }
+
+    /* ── Override row ── */
+    .override-note {
+      font-size: 0.75em;
+      color: var(--text-muted);
+      font-style: italic;
+      margin-top: 3px;
+    }
+
+    /* ── Submit button ── */
+    #addBtn {
+      width: 100%;
+      padding: 10px;
+      background-color: #4CAF50;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-family: var(--sans);
+      font-size: 13px;
+      font-weight: bold;
+      margin-top: 4px;
+      transition: background 0.2s;
+    }
+    #addBtn:hover:not(:disabled) { background-color: #43a047; }
+    #addBtn:disabled { background-color: #ccc; cursor: not-allowed; }
+
+    /* ── Toast ── */
+    #msg {
+      display: none;
+      margin-top: 12px;
+      padding: 8px;
+      border-radius: 4px;
+      text-align: center;
+      font-size: 0.9em;
+    }
+
+    /* ── Scrollbar ── */
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+  </style>
+</head>
+<body>
+
+  <!-- ── Food Details ── -->
+  <div class="card">
+    <div class="card-header">
+      <div class="dot" style="background:#4CAF50"></div>Food Details
+    </div>
+    <div class="card-body">
+
+      <div class="field">
+        <label>Food Name</label>
+        <div class="autocomplete-wrap">
+          <input type="text" id="foodName" placeholder="Start typing..." oninput="checkName()" autocomplete="off">
+          <div id="matches" class="match-list"></div>
+        </div>
+        <div id="nameStatus" class="field-status"></div>
+      </div>
+
+      <div class="row">
+        <div class="field">
+          <label>Portion (g)</label>
+          <input type="number" id="portion" placeholder="0" min="0" step="0.1" oninput="calcFactor()">
+        </div>
+        <div class="field">
+          <label>Total Carbs (g)</label>
+          <input type="number" id="totalCarbs" placeholder="0" min="0" step="0.1" oninput="calcFactor()">
+        </div>
+      </div>
+
+      <div class="row">
+        <div class="field">
+          <label>Fiber (g)</label>
+          <input type="number" id="totalFiber" placeholder="0" min="0" step="0.1" oninput="calcFactor()">
+        </div>
+        <div class="field">
+          <label>Carb Factor</label>
+          <input type="text" id="carbFactor" disabled value="0.00">
+        </div>
+      </div>
+
+      <div class="row">
+        <div class="field">
+          <label>Fat (g)</label>
+          <input type="number" id="fat" placeholder="0" min="0" step="0.1" oninput="recalcAbsorption()">
+        </div>
+        <div class="field">
+          <label>Protein (g)</label>
+          <input type="number" id="protein" placeholder="0" min="0" step="0.1" oninput="recalcAbsorption()">
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ── Preparation ── -->
+  <div class="card">
+    <div class="card-header">
+      <div class="dot" style="background:#f5a623"></div>Preparation
+    </div>
+    <div class="card-body">
+
+      <div class="row">
+        <div class="field">
+          <label>Cooking Method</label>
+          <select id="method" onchange="recalcAbsorption()">
+            <option value="">Select...</option>
+            <option value="toasted">Toasted</option>
+            <option value="air_fryer">Air fryer</option>
+            <option value="baked">Baked</option>
+            <option value="fried">Fried</option>
+            <option value="pan_fried_oil">Pan-fried (with oil)</option>
+            <option value="boiled_steamed">Boiled / steamed</option>
+            <option value="raw">Raw</option>
+            <option value="other">Other</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Texture / Form</label>
+          <select id="texture" onchange="recalcAbsorption()">
+            <option value="">Select...</option>
+            <option value="liquid">Liquid</option>
+            <option value="blended">Blended</option>
+            <option value="mashed_soft">Mashed / soft</option>
+            <option value="solid">Solid</option>
+          </select>
+        </div>
+      </div>
+
+      <label class="checkbox-row">
+        <input type="checkbox" id="mixedMeal" onchange="recalcAbsorption()">
+        <span>Usually eaten as part of a mixed meal</span>
+      </label>
+
+    </div>
+  </div>
+
+  <!-- ── Absorption Estimate ── -->
+  <div class="card">
+    <div class="card-header">
+      <div class="dot" style="background:#43a047"></div>Absorption Estimate
+    </div>
+    <div class="card-body">
+
+      <div class="abs-grid">
+        <div class="abs-box highlight">
+          <div class="abs-label">Time</div>
+          <div class="abs-val" id="absHours">3.0</div>
+          <div class="abs-sub">hours</div>
+        </div>
+        <div class="abs-box">
+          <div class="abs-label">Speed</div>
+          <div class="abs-cat" id="absCategory" style="color:#f5a623">Medium</div>
+          <div class="abs-sub" id="absGi">moderate GI</div>
+        </div>
+      </div>
+
+      <div class="speed-bar">
+        <div class="speed-bar-labels"><span>Fast</span><span>Slow</span></div>
+        <div class="speed-track">
+          <div class="speed-fill" id="speedFill"></div>
+        </div>
+        <div class="speed-ticks">
+          <span class="speed-tick">2h</span>
+          <span class="speed-tick">3h</span>
+          <span class="speed-tick">4h</span>
+          <span class="speed-tick">5h</span>
+          <span class="speed-tick">6h</span>
+        </div>
+      </div>
+
+      <div class="field" style="margin-top:10px;margin-bottom:0">
+        <label>Absorption Rate (hours)</label>
+        <input type="number" id="absorption" value="3.0" step="0.5" oninput="onManualOverride()">
+        <div class="override-note">Auto-calculated above — edit to override</div>
+      </div>
+
+    </div>
+  </div>
+
+  <button id="addBtn" disabled onclick="submitFood()">Add to Food Chart</button>
+  <div id="msg"></div>
+
+  <script>
+    let library = [];
+
+    window.onload = function() {
+      google.script.run
+        .withSuccessHandler(function(data) { library = data; })
+        .getFoodLibrary();
+    };
+
+    function calcFactor() {
+      const p = parseFloat(document.getElementById('portion').value) || 0;
+      const c = parseFloat(document.getElementById('totalCarbs').value) || 0;
+      const f = parseFloat(document.getElementById('totalFiber').value) || 0;
+      const net = Math.max(0, c - f);
+      const rawFactor = p > 0 ? (net / p) : 0;
+      const truncated = (Math.floor(rawFactor * 100) / 100).toFixed(2);
+      document.getElementById('carbFactor').value = truncated;
+      recalcAbsorption(net);
+      validate();
+    }
+
+    function recalcAbsorption(netOverride) {
+      const c = parseFloat(document.getElementById('totalCarbs').value) || 0;
+      const f = parseFloat(document.getElementById('totalFiber').value) || 0;
+      const net = (typeof netOverride === "number") ? netOverride : Math.max(0, c - f);
+
+      const meta = {
+        netCarbs:  net,
+        fat:       parseFloat(document.getElementById('fat')?.value)     || 0,
+        protein:   parseFloat(document.getElementById('protein')?.value) || 0,
+        method:    document.getElementById('method')?.value   || "",
+        texture:   document.getElementById('texture')?.value  || "",
+        mixedMeal: document.getElementById('mixedMeal')?.checked || false
+      };
+
+      google.script.run
+        .withSuccessHandler(function(hours) {
+          document.getElementById('absorption').value = hours;
+          updateAbsorptionUI(hours);
+        })
+        .getEstimatedAbsorption(meta);
+    }
+
+    function updateAbsorptionUI(hours) {
+      hours = parseFloat(hours);
+      document.getElementById('absHours').textContent = hours.toFixed(1);
+
+      let cat, sub, color;
+      if (hours <= 2)      { cat = "Fast";      sub = "high GI";           color = "#e53935"; }
+      else if (hours <= 3) { cat = "Medium";    sub = "moderate GI";       color = "#f5a623"; }
+      else if (hours <= 5) { cat = "Slow";      sub = "low GI / fat";      color = "#43a047"; }
+      else                 { cat = "Very Slow"; sub = "high fat / protein"; color = "#1e88e5"; }
+
+      const catEl = document.getElementById('absCategory');
+      catEl.textContent = cat;
+      catEl.style.color = color;
+      document.getElementById('absGi').textContent = sub;
+
+      // Map 2–6h → 5–95%
+      const pct = Math.min(95, Math.max(5, ((hours - 2) / 4) * 90 + 5));
+      const fill = document.getElementById('speedFill');
+      fill.style.width      = pct + '%';
+      fill.style.background = color;
+    }
+
+    function onManualOverride() {
+      const val = parseFloat(document.getElementById('absorption').value);
+      if (!isNaN(val)) updateAbsorptionUI(val);
+    }
+
+    function checkName() {
+      const val        = document.getElementById('foodName').value.trim().toLowerCase();
+      const matchesDiv = document.getElementById('matches');
+      const statusDiv  = document.getElementById('nameStatus');
+
+      if (val.length < 2) {
+        matchesDiv.style.display = 'none';
+        statusDiv.innerText = "";
+        validate();
+        return;
+      }
+
+      const exactMatch = library.find(item => item.name.toLowerCase() === val);
+      const partials   = library.filter(item => item.name.toLowerCase().includes(val) && item.name.toLowerCase() !== val);
+
+      if (exactMatch) {
+        statusDiv.innerHTML   = "⚠️ Food already exists";
+        statusDiv.className   = "field-status status-error";
+      } else {
+        statusDiv.innerText = "";
+        statusDiv.className = "field-status";
+      }
+
+      if (partials.length > 0) {
+        matchesDiv.innerHTML = partials.map(p =>
+          `<div class="match-item" onclick="selectMatch('${p.name.replace(/'/g,"\\'")}', ${p.factor}, ${p.absorption})">${p.name}</div>`
+        ).join('');
+        matchesDiv.style.display = 'block';
+      } else {
+        matchesDiv.style.display = 'none';
+      }
+      validate();
+    }
+
+    function selectMatch(name, factor, absorption) {
+      document.getElementById('foodName').value   = name;
+      const truncated = (Math.floor(factor * 100) / 100).toFixed(2);
+      document.getElementById('carbFactor').value = truncated;
+      document.getElementById('absorption').value = absorption;
+      updateAbsorptionUI(absorption);
+      document.getElementById('matches').style.display = 'none';
+      recalcAbsorption();
+      checkName();
+    }
+
+    function validate() {
+      const name    = document.getElementById('foodName').value.trim();
+      const portion = document.getElementById('portion').value;
+      const isDupe  = document.getElementById('nameStatus').classList.contains('status-error');
+      document.getElementById('addBtn').disabled = (!name || !portion || isDupe);
+    }
+
+    function submitFood() {
+      const foodObj = {
+        name:       document.getElementById('foodName').value.trim(),
+        factor:     parseFloat(document.getElementById('carbFactor').value),
+        absorption: parseFloat(document.getElementById('absorption').value)
+      };
+
+      const btn = document.getElementById('addBtn');
+      btn.disabled  = true;
+      btn.innerText = "Adding...";
+
+      google.script.run
+        .withSuccessHandler(function(res) {
+          showMsg(res, "#e8f5e9", "#2e7d32");
+          clearFields();
+          google.script.run.withSuccessHandler(function(data) { library = data; }).getFoodLibrary();
+        })
+        .withFailureHandler(function(err) {
+          showMsg("Error: " + err.message, "#ffebee", "#c62828");
+          btn.disabled  = false;
+          btn.innerText = "Add to Food Chart";
+        })
+        .addFoodToChart(foodObj);
+    }
+
+    function showMsg(text, bg, color) {
+      const m = document.getElementById('msg');
+      m.innerText = text;
+      m.style.display = 'block';
+      m.style.backgroundColor = bg;
+      m.style.color = color;
+      setTimeout(() => { m.style.display = 'none'; }, 4000);
+    }
+
+    function clearFields() {
+      document.getElementById('foodName').value    = "";
+      document.getElementById('portion').value     = "";
+      document.getElementById('totalCarbs').value  = "";
+      document.getElementById('totalFiber').value  = "";
+      document.getElementById('carbFactor').value  = "0.00";
+      document.getElementById('absorption').value  = "3.0";
+      document.getElementById('fat').value         = "";
+      document.getElementById('protein').value     = "";
+      document.getElementById('method').value      = "";
+      document.getElementById('texture').value     = "";
+      document.getElementById('mixedMeal').checked = false;
+      document.getElementById('addBtn').innerText  = "Add to Food Chart";
+      updateAbsorptionUI(3.0);
+      document.getElementById('nameStatus').innerText = "";
+      document.getElementById('nameStatus').className = "field-status";
+      validate();
+    }
+
+    document.addEventListener('click', function(e) {
+      if (!e.target.closest('.autocomplete-wrap')) {
+        document.getElementById('matches').style.display = 'none';
+      }
+    });
+  </script>
+</body>
+</html>
