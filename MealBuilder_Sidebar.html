@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <style>
+    body { font-family: 'Segoe UI', Arial, sans-serif; padding: 12px; background-color: #f8f9fa; }
+    .label { font-size: 10px; font-weight: bold; color: #5f6368; display: block; margin-bottom: 2px; text-transform: uppercase; }
+    .title-input { width: 100%; padding: 8px; margin-bottom: 15px; border: 1px solid #dadce0; border-radius: 4px; box-sizing: border-box; }
+    .ing-row { display: flex; gap: 4px; margin-bottom: 8px; align-items: center; }
+    input[type="number"], input[type="text"] { padding: 6px 4px; border: 1px solid #ddd; border-radius: 4px; font-size: 11px; }
+    .f-name { width: 35%; } 
+    .f-cf { width: 15%; background-color: #f1f3f4; text-align: center; border: none; } 
+    .f-abs { width: 15%; background-color: #fff4e5; text-align: center; border: none; } 
+    .f-wt { width: 20%; }
+    .f-nc { width: 15%; border: none; background: transparent; text-align: right; font-weight: bold; font-size: 11px; }
+    .btn-submit { background-color: #1a73e8; color: white; border: none; padding: 12px; width: 100%; border-radius: 4px; cursor: pointer; margin-top: 15px; font-weight: 500; }
+    .summary { background: white; padding: 12px; border: 1px solid #dadce0; border-radius: 8px; margin-top: 10px; }
+    .summary-row { display: flex; justify-content: space-between; margin-bottom: 5px; font-size: 12px; }
+    .highlight { color: #1a73e8; font-weight: bold; }
+    hr { border: 0; border-top: 1px solid #eee; margin: 10px 0; }
+  </style>
+</head>
+<body>
+  <label class="label">Meal Title</label>
+  <input type="text" id="mealTitle" class="title-input" placeholder="e.g., Omelette">
+
+  <div style="display: flex; gap: 4px; margin-bottom: 4px; padding-left: 2px;">
+    <span class="label" style="width: 35%; text-align: left;">Food</span>
+    <span class="label" style="width: 15%; text-align: center;">CF</span>
+    <span class="label" style="width: 15%; text-align: center;">Abs</span>
+    <span class="label" style="width: 20%; text-align: center;">Wt(g)</span>
+    <span class="label" style="width: 15%; text-align: right;">Crb</span>
+  </div>
+
+  <div id="ingredientList"></div>
+
+  <div class="summary">
+    <div class="summary-row"><span>Total Weight:</span> <span><span id="totWt">0</span>g</span></div>
+    <div class="summary-row"><span>Final CF:</span> <span id="finalCF" class="highlight">-</span></div>
+    <div class="summary-row"><span>Meal Abs Rate:</span> <span id="mealAbs" class="highlight">-</span></div>
+    <hr>
+    <div class="summary-row" style="align-items: center;">
+      <span>Weight given:</span>
+      <input type="number" id="weightToEat" style="width: 60px;" oninput="calculateTotals()">
+    </div>
+    <div class="summary-row" style="font-size: 14px; margin-top: 8px;">
+      <strong>Portion Carbs:</strong>
+      <strong id="portionCarbs" style="color: #d93025;">0.00</strong>
+    </div>
+  </div>
+
+  <button class="btn btn-submit" id="submitBtn" onclick="submitMeal()">Add Meal to Sheet</button>
+  <datalist id="foodList"></datalist>
+
+  <script>
+  let foodDb = [];
+
+  window.onload = function() {
+    google.script.run.withSuccessHandler(function(data) {
+      foodDb = data;
+      const dl = document.getElementById('foodList');
+      data.forEach(item => {
+        let opt = document.createElement('option');
+        opt.value = item.name;
+        dl.appendChild(opt);
+      });
+      addRow(); 
+    }).MealBuilder_getFoodChart();
+  };
+
+  function addRow() {
+    const container = document.getElementById('ingredientList');
+    const div = document.createElement('div');
+    div.className = 'ing-row';
+    div.innerHTML = `
+      <input type="text" class="f-name" list="foodList" placeholder="Add food" oninput="handleRowInput(this)">
+      <input type="text" class="f-cf" readonly tabindex="-1">
+      <input type="text" class="f-abs" readonly tabindex="-1">
+      <input type="text" class="f-wt" placeholder="Weight" oninput="calculateTotals()">
+      <input type="text" class="f-nc" readonly value="0.00">
+    `;
+    container.appendChild(div);
+  }
+
+  function handleRowInput(input) {
+    const row = input.parentElement;
+    const typedValue = input.value.trim().toLowerCase();
+    const match = foodDb.find(f => f.name.toLowerCase() === typedValue);
+    
+    if (match) { 
+      row.querySelector('.f-cf').value = match.cf; 
+      row.querySelector('.f-abs').value = match.abs.toFixed(1); 
+      const allRows = document.querySelectorAll('.ing-row');
+      if (row === allRows[allRows.length - 1]) { addRow(); }
+    } else {
+      row.querySelector('.f-cf').value = "";
+      row.querySelector('.f-abs').value = "";
+    }
+    calculateTotals();
+  }
+
+  function calculateTotals() {
+    let totalWt = 0; 
+    let totalNet = 0;
+    let sumProductAbs = 0;
+
+    document.querySelectorAll('.ing-row').forEach(row => {
+      const cf = parseFloat(row.querySelector('.f-cf').value) || 0;
+      const abs = parseFloat(row.querySelector('.f-abs').value) || 0;
+      const wt = parseFloat(row.querySelector('.f-wt').value) || 0;
+      const net = cf * wt;
+      
+      row.querySelector('.f-nc').value = net.toFixed(2);
+      totalWt += wt; 
+      totalNet += net;
+      if (net > 0) { sumProductAbs += (abs * net); }
+    });
+
+    const finalCF = totalWt > 0 ? (totalNet / totalWt) : 0;
+    const mealAbs = totalNet > 0 ? (sumProductAbs / totalNet) : 3.0;
+    const roundedAbs = Math.round(mealAbs * 2) / 2;
+
+    document.getElementById('totWt').innerText = totalWt.toFixed(1);
+    document.getElementById('finalCF').innerText = finalCF.toFixed(2);
+    document.getElementById('mealAbs').innerText = roundedAbs.toFixed(1);
+    
+    const weightToEat = parseFloat(document.getElementById('weightToEat').value) || 0;
+    document.getElementById('portionCarbs').innerText = (weightToEat * finalCF).toFixed(2);
+  }
+
+  function submitMeal() {
+    const btn = document.getElementById('submitBtn');
+    btn.disabled = true;
+    btn.innerText = "Adding...";
+
+    const ingredients = [];
+    let calcNetCarbs = 0;
+    document.querySelectorAll('.ing-row').forEach(row => {
+      const name = row.querySelector('.f-name').value;
+      const cf = parseFloat(row.querySelector('.f-cf').value) || 0;
+      const abs = parseFloat(row.querySelector('.f-abs').value) || 0;
+      const wt = parseFloat(row.querySelector('.f-wt').value) || 0;
+      const net = cf * wt;
+      if (name && wt > 0) {
+        ingredients.push({ food: name, cf: cf, abs: abs, weight: wt, carbs: net });
+        calcNetCarbs += net;
+      }
+    });
+
+    const payload = {
+      title: document.getElementById('mealTitle').value || "Untitled Meal",
+      ingredients: ingredients,
+      recipeWeight: parseFloat(document.getElementById('totWt').innerText) || 0,
+      recipeNetCarbs: calcNetCarbs,
+      totalCarbFactor: parseFloat(document.getElementById('finalCF').innerText) || 0,
+      mealAbs: parseFloat(document.getElementById('mealAbs').innerText) || 3.0,
+      weightGiven: parseFloat(document.getElementById('weightToEat').value) || 0,
+      totalCarbs: parseFloat(document.getElementById('portionCarbs').innerText) || 0
+    };
+
+    google.script.run
+      .withSuccessHandler(() => {
+        document.getElementById('mealTitle').value = "";
+        document.getElementById('weightToEat').value = "";
+        document.getElementById('ingredientList').innerHTML = "";
+        addRow(); calculateTotals();
+        btn.innerText = "Added! ✓";
+        btn.style.backgroundColor = "#188038";
+        setTimeout(() => {
+          btn.disabled = false;
+          btn.innerText = "Add Meal to Sheet";
+          btn.style.backgroundColor = "#1a73e8";
+        }, 2000);
+      })
+      .withFailureHandler(err => {
+        alert("Error: " + err.message);
+        btn.disabled = false;
+        btn.innerText = "Add Meal to Sheet";
+      })
+      .MealBuilder_addToMeal(payload);
+  }
+</script>
+</body>
+</html>
