@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <meta charset="UTF-8">
+  <style>
+    body {
+      font: 13px Arial, sans-serif;
+      padding: 12px;
+      background-color: #f8f9fa;
+      color: #202124;
+      user-select: text;
+    }
+
+    .button-row {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 4px;
+    }
+
+    .btn {
+      background-color: #1a73e8;
+      color: #fff;
+      border: 0;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 500;
+      flex-grow: 1;
+      transition: background-color 0.2s;
+      white-space: nowrap;
+      padding: 8px;
+    }
+
+    .btn:hover { background-color: #176ad0; }
+    .btn:disabled {
+      background-color: #ccc;
+      cursor: not-allowed;
+    }
+
+    .small {
+      font-size: 12px;
+      color: #188038;
+      margin-top: 2px;
+      display: block;
+      min-height: 15px;
+    }
+
+    .warn {
+      color: #d93025;
+      margin-top: 4px;
+      font-size: 13px;
+      font-weight: 500;
+      min-height: 16px;
+    }
+
+    input#q {
+      width: 100%;
+      margin: 10px 0;
+      padding: 8px;
+      box-sizing: border-box;
+      border: 1px solid #dadce0;
+      border-radius: 4px;
+      font-size: 14px;
+    }
+
+    #results {
+      max-height: 520px;
+      overflow-y: auto;
+      margin-top: 4px;
+    }
+
+    .row {
+      background: #fff;
+      border-radius: 6px;
+      border: 1px solid #dadce0;
+      padding: 10px;
+      margin-bottom: 10px;
+      box-shadow: 0 1px 2px rgba(60,64,67,0.15);
+    }
+
+    .date-header {
+      font-weight: 300;
+      color: #5f6368;
+      font-size: 13px;
+      margin-bottom: 4px;
+      text-align: right; 
+      display: block;
+      }
+
+    .food-title {
+      font-size: 14px;
+      font-weight: 300;
+      color: #1a73e8;
+      margin-bottom: 6px;
+      padding-top: 5px;
+    }
+
+    .stats-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 4px;
+      background: #f1f3f4;
+      padding: 6px;
+      border-radius: 4px;
+      margin-bottom: 8px;
+    }
+
+    .field { font-size: 12px; }
+    .label { font-weight: 600; color: #3c4043; }
+
+    .link-area {
+      border-top: 1px solid #eee;
+      padding-top: 6px;
+      text-align: right;
+    }
+
+    .link-area a {
+      color: #1a73e8;
+      text-decoration: none;
+      font-size: 12px;
+    }
+
+    mark {
+      background: #fffd54;
+      padding: 0 2px;
+      border-radius: 2px;
+    }
+
+    .empty {
+      text-align: center;
+      color: #70757a;
+      padding: 20px 0;
+      font-style: italic;
+    }
+
+    .meal-label {
+      font-size: 12px;
+      color: #5f6368;
+      text-align: right;
+      margin-bottom: 4px;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="button-row">
+    <button id="rebuild" class="btn">Rebuild Food Index</button>
+  </div>
+  <span id="count" class="small"></span>
+  <div id="warn" class="warn"></div>
+
+  <input id="q" type="text" placeholder="Search (e.g. Bread, Banana)..." autocomplete="off">
+
+  <div id="results"></div>
+
+  <script>
+    const $ = sel => document.querySelector(sel);
+
+    function esc(str) {
+      return String(str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    function hi(text, query) {
+      if (!query) return esc(text);
+      const regex = new RegExp(`(${query.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&')})`, 'gi');
+      return esc(text).replace(regex, '<mark>$1</mark>');
+    }
+    
+    function render(res, q) {
+      const box = $('#results');
+      const countLabel = $('#count');
+      if (!res) res = { rows: [] }; 
+      const list = res.rows || [];
+
+      if (!list.length) {
+        box.innerHTML = `<div class="empty">No matches found for "${esc(q)}"</div>`;
+        return;
+      }
+
+      box.innerHTML = list.map(r => `
+        <div class="row">
+          <div class="date-header">${r.date}</div> 
+          <div class="meal-label">${esc(r.meal)}</div> 
+          <div class="food-title">${hi(r.food, q)}</div>
+          <div class="stats-grid">
+            <div class="field"><span class="label">CF:</span> ${r.cf}</div>
+            <div class="field"><span class="label">Weight:</span> ${r.wt}g</div>
+            <div class="field"><span class="label">Net Carbs:</span> ${r.carbs}</div>
+          </div>
+          <div class="link-area">
+            <a href="${r.docUrl}" target="_blank">View Original Doc ↗</a>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    function search() {
+      const q = $('#q').value.trim();
+      if (q.length < 2) {
+        $('#results').innerHTML = '';
+        updateCount();
+        return;
+      }
+      $('#results').innerHTML = '<div class="empty">Searching...</div>';
+      google.script.run
+        .withSuccessHandler(res => render(res, q))
+        .withFailureHandler(err => $('#warn').textContent = 'Error: ' + err.message)
+        .FoodSearch_query(q);
+    }
+
+    function triggerRebuild() {
+      const btn = $('#rebuild');
+      btn.disabled = true;
+      btn.textContent = 'Scanning Docs...';
+      $('#warn').textContent = '';
+      google.script.run
+        .withSuccessHandler(info => {
+          btn.disabled = false;
+          btn.textContent = 'Rebuild Food Index';
+          updateCount();
+          const q = $('#q').value.trim();
+          if (q) search();
+        })
+        .withFailureHandler(err => {
+          btn.disabled = false;
+          $('#warn').textContent = 'Rebuild failed: ' + err.message;
+        })
+        .FoodSearch_rebuildIndex();
+    }
+
+    function updateCount() {
+      // THE FIX: This handshake establishes the server connection immediately
+      google.script.run
+        .withSuccessHandler(info => {
+          if (info && info.count !== undefined) {
+            document.getElementById('count').textContent = `Index has ${info.count} total food records.`;
+          }
+        })
+        .withFailureHandler(err => {
+          document.getElementById('count').textContent = "Error loading status.";
+        })
+        .FoodSearch_getIndexCounts();
+    }
+
+    // Event Listeners
+    $('#q').addEventListener('input', () => {
+      clearTimeout(window.searchTimeout);
+      window.searchTimeout = setTimeout(search, 200);
+    });
+
+    $('#rebuild').addEventListener('click', triggerRebuild);
+
+    // FIXED INITIAL LOAD
+    window.onload = function() {
+    };
+  </script>
+</body>
+</html>
