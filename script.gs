@@ -82,7 +82,6 @@ function onEdit_UpdateMealValues(e) {
 
   var BLOCK          = 6;
   var FIRST_FOOD_ROW = 2;
-  var MAX_ITEMS      = 15;
   var mod            = (r - FIRST_FOOD_ROW) % BLOCK;
 
   // Bi-directional weight ↔ carbs math
@@ -97,7 +96,19 @@ function onEdit_UpdateMealValues(e) {
     }
   }
 
-  // Recalculate F7 (total net carbs) and F8 (avg absorption)
+  recalcTotals_(sh);
+}
+
+/**
+ * Recalculates F7 (total net carbs) and F8 (avg absorption) by reading all
+ * food item slots on the sheet. Called after any manual edit and after
+ * programmatic changes (e.g. Meal Builder sidebar) so F7 is always current.
+ */
+function recalcTotals_(sh) {
+  var BLOCK          = 6;
+  var FIRST_FOOD_ROW = 2;
+  var MAX_ITEMS      = 15;
+
   var totalNetCarbs = 0;
   var sumProduct    = 0;
   var itemsFound    = 0;
@@ -125,7 +136,7 @@ function onEdit_UpdateMealValues(e) {
     sh.getRange(8, 6).setValue(round05_(avgAbs));
   }
 
-  // F13 is formula-driven — always restore after any edit to ensure it's present
+  // F13 is formula-driven — always restore after any recalculation
   restoreF13Formula_(sh);
 }
 
@@ -140,10 +151,10 @@ function onEdit_UpdateMealValues(e) {
  * Called after any recalculation and after clear operations.
  */
 function restoreF13Formula_(sh) {
+  // Full insulin dose: carb bolus + correction bolus, without subtracting IOB or COB.
   sh.getRange('F13').setFormula(
     '=IF(OR(F2<=0,F4<=0),"",IF(AND(F6=0,F7=0),"",FLOOR(MAX(0,' +
-    'IF(F2>0,F7/F2,0)+IF(AND(F4>0,F3>0,F6>0),(F6-F3)/F4,0)' +
-    '-IF(F10>0,F10,0)-IF(F11>0,F11/F2,0)),0.05)))');
+    'IF(F2>0,F7/F2,0)+IF(AND(F4>0,F3>0,F6>0),(F6-F3)/F4,0)),0.05)))');
 }
 
 
@@ -868,6 +879,9 @@ function MealBuilder_addToMeal(payload) {
   sheet.getRange('W7').setValue(payload.mealAbs);
   sheet.getRange('W9').setValue(payload.weightGiven);
   sheet.getRange('W10').setValue(payload.totalCarbs);
+
+  // Programmatic setValue() doesn't fire onEdit, so recalculate F7/F8/F13 explicitly.
+  recalcTotals_(sheet);
   return { success: true };
 }
 
