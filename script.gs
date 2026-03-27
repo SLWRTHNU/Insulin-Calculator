@@ -296,13 +296,37 @@ function onEdit_PostBolusTracking(e) {
   var rng  = e.range;
   var sh   = rng.getSheet();
   if (MEAL_SHEET_NAMES.indexOf(sh.getName()) === -1) return;
-  if (rng.getRow() !== 16 || rng.getColumn() !== 6) return;
+
+  var row = rng.getRow();
+  var col = rng.getColumn();
+
+  // F18 entered: immediately freeze F19 at (F18 - F16) without waiting for next tick.
+  if (row === 18 && col === 6) {
+    var tz        = SpreadsheetApp.getActive().getSpreadsheetTimeZone();
+    var f16Text   = (sh.getRange('F16').getDisplayValue() || '').trim();
+    var f18Text   = rng.getDisplayValue().trim();
+    if (f16Text && f18Text) {
+      var bolusDate = pb_buildDateFromTimeString_(f16Text, tz);
+      var eatDate   = pb_buildDateFromTimeString_(f18Text, tz);
+      if (bolusDate && eatDate) {
+        var frozenMin = Math.round((eatDate.getTime() - bolusDate.getTime()) / 60000);
+        sh.getRange('F19').setValue(frozenMin + ' minutes');
+      }
+    }
+    return;
+  }
+
+  if (row !== 16 || col !== 6) return;
 
   var val = rng.getDisplayValue();
-  if (!val) { sh.getRange('I5:M10').clearContent(); return; }
+  if (!val) {
+    sh.getRange('I5:M10').clearContent();
+    sh.getRange('F19').setValue('');
+    return;
+  }
 
-  var tz        = SpreadsheetApp.getActive().getSpreadsheetTimeZone();
-  var bolusDate = pb_buildDateFromTimeString_(val, tz);
+  var tz2       = SpreadsheetApp.getActive().getSpreadsheetTimeZone();
+  var bolusDate = pb_buildDateFromTimeString_(val, tz2);
   var now       = new Date();
 
   if (bolusDate && bolusDate.getTime() > now.getTime()) {
@@ -335,6 +359,19 @@ function pb_tick_() {
     if (!f16Text) return;
     var bolusDate = pb_buildDateFromTimeString_(f16Text, tz);
     if (!bolusDate) return;
+
+    // Update F19: count up from F16 until F18 is set, then freeze.
+    var f18Text = (sh.getRange('F18').getDisplayValue() || '').trim();
+    if (!f18Text) {
+      var elapsedMin = Math.round((now.getTime() - bolusDate.getTime()) / 60000);
+      sh.getRange('F19').setValue(elapsedMin + ' minutes');
+    } else {
+      var eatDate = pb_buildDateFromTimeString_(f18Text, tz);
+      if (eatDate) {
+        var frozenMin = Math.round((eatDate.getTime() - bolusDate.getTime()) / 60000);
+        sh.getRange('F19').setValue(frozenMin + ' minutes');
+      }
+    }
 
     for (var i = 0; i < PB_OFFSETS_MIN.length; i++) {
       var row      = PB_START_ROW + i;
@@ -1066,7 +1103,7 @@ function ClearMealChart() {
       '=IF(C' + base + '="", "", IFERROR(VLOOKUP(C' + base + ', \'Food Chart\'!A:D, 4, FALSE), ""))');
   }
 
-  sheet.getRange('F19').setFormula('=IF(OR(F18="",F16=""),"",ROUND((F18-F16)*24*60,0)&" minutes")');
+  sheet.getRange('F19').setValue('');
   restoreF13Formula_(sheet);
 
   sheet.getRange('A1').activate();
@@ -1103,7 +1140,7 @@ function ClearMealChartForSheet_(sh) {
       '=IF(C' + base + '="", "", IFERROR(VLOOKUP(C' + base + ', \'Food Chart\'!A:D, 4, FALSE), ""))');
   }
 
-  sh.getRange('F19').setFormula('=IF(OR(F18="",F16=""),"",ROUND((F18-F16)*24*60,0)&" minutes")');
+  sh.getRange('F19').setValue('');
   restoreF13Formula_(sh);
 }
 
