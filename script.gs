@@ -590,7 +590,7 @@ function DailyExport_buildMealNote_(sh, tz) {
     lines.push('');
   }
 
-  var notes = [cv('E23'), cv('E24'), cv('E25')].filter(Boolean);
+  var notes = [cv('E24'), cv('E25')].filter(Boolean);
   if (notes.length) {
     lines.push('-- Notes --');
     notes.forEach(function(n) { lines.push(n); });
@@ -1095,7 +1095,7 @@ function ClearMealChart() {
     rangesToClear.push('C' + (startRow + 5)); // Total carbs
   }
   rangesToClear.push(
-    'D1:D90', 'E23:E25',
+    'D1:D90', 'E24:E25',
     'F7', 'F8', 'F13', 'F14', 'F15',
     'F17', 'F18', 'F19',
     'I5:M10', 'P5:T24', 'W4:W10'
@@ -1132,7 +1132,7 @@ function ClearMealChartForSheet_(sh) {
     rangesToClear.push('C' + (startRow + 5));
   }
   rangesToClear.push(
-    'D1:D90', 'E23:E25',
+    'D1:D90', 'E24:E25',
     'F7', 'F8', 'F13', 'F14', 'F15',
     'F17', 'F18', 'F19',
     'I5:M10', 'P5:T24', 'W4:W10'
