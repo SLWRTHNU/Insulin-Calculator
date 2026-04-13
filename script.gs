@@ -6,7 +6,7 @@
  *    1.  CONFIG & CONSTANTS
  *    2.  MENU  (onOpen / onEdit router)
  *    3.  MEAL VALUES  (weight↔carbs, F7/F8 totals)
- *    4.  BOLUS CALCULATION  (F13 formula-driven, COB-aware)
+ *    4.  BOLUS CALCULATION  (F13/F14/F15 formula-driven)
  *    5.  BG SYNC  (Nightscout → meal sheets)
  *    6.  POST-BOLUS TRACKING
  *    7.  DAILY EXPORT
@@ -136,23 +136,28 @@ function recalcTotals_(sh) {
     sh.getRange(8, 6).setValue(round05_(avgAbs));
   }
 
-  // F13 is formula-driven — always restore after any recalculation
-  restoreF13Formula_(sh);
+  // F13/F14/F15 are formula-driven — always restore after any recalculation
+  restoreBolusFormulas_(sh);
 }
 
 
 /* ======================================================
-   4.  BOLUS CALCULATION  (F13 formula-driven, COB-aware)
+   4.  BOLUS CALCULATION  (F13/F14/F15 formula-driven)
    ====================================================== */
 
 /**
- * Restores the F13 bolus formula.
- * Accounts for IOB (F10) and COB converted to insulin units (F11 / F2).
+ * Restores the Meal Bolus (F13), Correction Bolus (F14), and Total Bolus (F15) formulas.
  * Called after any recalculation and after clear operations.
  */
-function restoreF13Formula_(sh) {
-  // Full insulin dose: carb bolus + correction bolus, without subtracting IOB or COB.
+function restoreBolusFormulas_(sh) {
+  // Meal Bolus: carbs ÷ carb ratio.
   sh.getRange('F13').setFormula(
+    '=IF(OR(F2<=0,F7=0),"",FLOOR(MAX(0,F7/F2),0.05))');
+  // Correction Bolus: BG above target ÷ ISF.
+  sh.getRange('F14').setFormula(
+    '=IF(OR(F4<=0,F3<=0,F6<=0),"",FLOOR(MAX(0,(F6-F3)/F4),0.05))');
+  // Total Bolus: full dose (meal + correction combined).
+  sh.getRange('F15').setFormula(
     '=IF(OR(F2<=0,F4<=0),"",IF(AND(F6=0,F7=0),"",FLOOR(MAX(0,' +
     'IF(F2>0,F7/F2,0)+IF(AND(F4>0,F3>0,F6>0),(F6-F3)/F4,0)),0.05)))');
 }
@@ -190,7 +195,7 @@ function updateMealSheetsBackgroundSync() {
     if (!sh) return;
 
     // Skip locked sheets (bolus already taken)
-    var lockTime = String(sh.getRange('F16').getDisplayValue() || '').trim();
+    var lockTime = String(sh.getRange('F17').getDisplayValue() || '').trim();
     if (lockTime) { sh.getRange('G6').setValue(''); return; }
 
     if (profileData) {
@@ -214,10 +219,10 @@ function updateMealSheetsBackgroundSync() {
       sh.getRange('G6').setValue(minutesAgo < 1 ? 'now' : minutesAgo + ' mins ago');
     }
 
-    // Always show current time in F17 (freezes when F16 is filled)
-    // F17 = current time + BG value (mmol) as minutes
+    // Always show current time in F18 (freezes when F17 is filled)
+    // F18 = current time + BG value (mmol) as minutes
     var bgMinutes = bgResult ? Math.round(bgResult.mmol) : 0;
-    sh.getRange('F17').setValue(new Date(now.getTime() + (bgMinutes * 60000)));
+    sh.getRange('F18').setValue(new Date(now.getTime() + (bgMinutes * 60000)));
 
   });
 }
@@ -300,28 +305,28 @@ function onEdit_PostBolusTracking(e) {
   var row = rng.getRow();
   var col = rng.getColumn();
 
-  // F18 entered: immediately freeze F19 at (F18 - F16) without waiting for next tick.
-  if (row === 18 && col === 6) {
+  // F19 entered: immediately freeze F20 at (F19 - F17) without waiting for next tick.
+  if (row === 19 && col === 6) {
     var tz        = SpreadsheetApp.getActive().getSpreadsheetTimeZone();
-    var f16Text   = (sh.getRange('F16').getDisplayValue() || '').trim();
-    var f18Text   = rng.getDisplayValue().trim();
-    if (f16Text && f18Text) {
-      var bolusDate = pb_buildDateFromTimeString_(f16Text, tz);
-      var eatDate   = pb_buildDateFromTimeString_(f18Text, tz);
+    var f17Text   = (sh.getRange('F17').getDisplayValue() || '').trim();
+    var f19Text   = rng.getDisplayValue().trim();
+    if (f17Text && f19Text) {
+      var bolusDate = pb_buildDateFromTimeString_(f17Text, tz);
+      var eatDate   = pb_buildDateFromTimeString_(f19Text, tz);
       if (bolusDate && eatDate) {
         var frozenMin = Math.round((eatDate.getTime() - bolusDate.getTime()) / 60000);
-        sh.getRange('F19').setValue(frozenMin + ' minutes');
+        sh.getRange('F20').setValue(frozenMin + ' minutes');
       }
     }
     return;
   }
 
-  if (row !== 16 || col !== 6) return;
+  if (row !== 17 || col !== 6) return;
 
   var val = rng.getDisplayValue();
   if (!val) {
     sh.getRange('I5:M10').clearContent();
-    sh.getRange('F19').setValue('');
+    sh.getRange('F20').setValue('');
     return;
   }
 
@@ -335,7 +340,7 @@ function onEdit_PostBolusTracking(e) {
   }
 
   // Freeze bolus-time snapshot — replace live values with static values
-  var cellsToFreeze = ['F2', 'F3', 'F4', 'F6', 'F10', 'F11', 'F13', 'F17'];
+  var cellsToFreeze = ['F2', 'F3', 'F4', 'F6', 'F10', 'F11', 'F13', 'F14', 'F15', 'F18'];
   cellsToFreeze.forEach(function(cell) {
     var v = sh.getRange(cell).getValue();
     if (v !== '' && v !== null) sh.getRange(cell).setValue(v);
@@ -355,21 +360,21 @@ function pb_tick_() {
   MEAL_SHEET_NAMES.forEach(function(sheetName) {
     var sh = ss.getSheetByName(sheetName);
     if (!sh) return;
-    var f16Text = (sh.getRange('F16').getDisplayValue() || '').trim();
-    if (!f16Text) return;
-    var bolusDate = pb_buildDateFromTimeString_(f16Text, tz);
+    var f17Text = (sh.getRange('F17').getDisplayValue() || '').trim();
+    if (!f17Text) return;
+    var bolusDate = pb_buildDateFromTimeString_(f17Text, tz);
     if (!bolusDate) return;
 
-    // Update F19: count up from F16 until F18 is set, then freeze.
-    var f18Text = (sh.getRange('F18').getDisplayValue() || '').trim();
-    if (!f18Text) {
+    // Update F20: count up from F17 until F19 is set, then freeze.
+    var f19Text = (sh.getRange('F19').getDisplayValue() || '').trim();
+    if (!f19Text) {
       var elapsedMin = Math.round((now.getTime() - bolusDate.getTime()) / 60000);
-      sh.getRange('F19').setValue(elapsedMin + ' minutes');
+      sh.getRange('F20').setValue(elapsedMin + ' minutes');
     } else {
-      var eatDate = pb_buildDateFromTimeString_(f18Text, tz);
+      var eatDate = pb_buildDateFromTimeString_(f19Text, tz);
       if (eatDate) {
         var frozenMin = Math.round((eatDate.getTime() - bolusDate.getTime()) / 60000);
-        sh.getRange('F19').setValue(frozenMin + ' minutes');
+        sh.getRange('F20').setValue(frozenMin + ' minutes');
       }
     }
 
@@ -561,11 +566,13 @@ function DailyExport_buildMealNote_(sh, tz) {
   lines.push('Carb Ratio:\t' + cv('F2') + ' | Target: ' + cv('F3') + ' | ISF: ' + cv('F4'));
   lines.push('Current BG:\t' + cv('F6') + ' | Total Net Carbs: ' + cv('F7'));
   lines.push('IOB:\t'        + cv('F10') + ' | COB: ' + cv('F11'));
-  lines.push('Total Bolus:\t' + cv('F13') + ' U');
+  lines.push('Meal Bolus:\t'       + cv('F13') + ' U');
+  lines.push('Correction Bolus:\t' + cv('F14') + ' U');
+  lines.push('Total Bolus:\t'      + cv('F15') + ' U');
   lines.push('');
 
-  if (cv('F16')) lines.push('Bolus Time: ' + cv('F16'));
-  if (cv('F18')) lines.push('Eat Time:   ' + cv('F18'));
+  if (cv('F17')) lines.push('Bolus Time: ' + cv('F17'));
+  if (cv('F19')) lines.push('Eat Time:   ' + cv('F19'));
   lines.push('');
 
   var bgData = sh.getRange('I5:M10').getValues();
@@ -917,7 +924,7 @@ function MealBuilder_addToMeal(payload) {
   sheet.getRange('W9').setValue(payload.weightGiven);
   sheet.getRange('W10').setValue(payload.totalCarbs);
 
-  // Programmatic setValue() doesn't fire onEdit, so recalculate F7/F8/F13 explicitly.
+  // Programmatic setValue() doesn't fire onEdit, so recalculate F7/F8/F13/F14/F15 explicitly.
   recalcTotals_(sheet);
   return { success: true };
 }
@@ -996,7 +1003,9 @@ function copyNote_buildMealNote_() {
   lines.push('');
   lines.push('IOB:\t'         + (getVal('F10') || ''));
   lines.push('COB:\t'         + (getVal('F11') || ''));
-  lines.push('Total Bolus:\t' + (getVal('F13') || ''));
+  lines.push('Meal Bolus:\t'       + (getVal('F13') || ''));
+  lines.push('Correction Bolus:\t' + (getVal('F14') || ''));
+  lines.push('Total Bolus:\t'      + (getVal('F15') || ''));
   return lines.join('\n');
 }
 
@@ -1087,8 +1096,8 @@ function ClearMealChart() {
   }
   rangesToClear.push(
     'D1:D90', 'E23:E25',
-    'F7', 'F8', 'F13', 'F14',
-    'F16', 'F17', 'F18',
+    'F7', 'F8', 'F13', 'F14', 'F15',
+    'F17', 'F18', 'F19',
     'I5:M10', 'P5:T24', 'W4:W10'
   );
   sheet.getRangeList(rangesToClear).clearContent();
@@ -1103,8 +1112,8 @@ function ClearMealChart() {
       '=IF(C' + base + '="", "", IFERROR(VLOOKUP(C' + base + ', \'Food Chart\'!A:D, 4, FALSE), ""))');
   }
 
-  sheet.getRange('F19').setValue('');
-  restoreF13Formula_(sheet);
+  sheet.getRange('F20').setValue('');
+  restoreBolusFormulas_(sheet);
 
   sheet.getRange('A1').activate();
   ss.toast('Sheet cleared');
@@ -1124,8 +1133,8 @@ function ClearMealChartForSheet_(sh) {
   }
   rangesToClear.push(
     'D1:D90', 'E23:E25',
-    'F7', 'F8', 'F13', 'F14',
-    'F16', 'F17', 'F18',
+    'F7', 'F8', 'F13', 'F14', 'F15',
+    'F17', 'F18', 'F19',
     'I5:M10', 'P5:T24', 'W4:W10'
   );
   sh.getRangeList(rangesToClear).clearContent();
@@ -1140,8 +1149,8 @@ function ClearMealChartForSheet_(sh) {
       '=IF(C' + base + '="", "", IFERROR(VLOOKUP(C' + base + ', \'Food Chart\'!A:D, 4, FALSE), ""))');
   }
 
-  sh.getRange('F19').setValue('');
-  restoreF13Formula_(sh);
+  sh.getRange('F20').setValue('');
+  restoreBolusFormulas_(sh);
 }
 
 
